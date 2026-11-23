@@ -300,7 +300,7 @@
     if (!append && !silent) {
       $('#results-head').hidden = true;
       $('#more-btn').hidden = true;
-      results.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Analyse des entreprises de ${h(s.city.nom)}… La première recherche peut prendre jusqu’à 30 secondes.</div>`;
+      results.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Analyse des entreprises de ${h(s.city.nom)}… Les premiers résultats arrivent en quelques secondes.</div>`;
     }
     const qs = new URLSearchParams({ city: s.city.code, trade: s.trade, status: s.status, min: String(s.min), offset: String(append ? s.offset : 0) });
     try {
@@ -311,10 +311,13 @@
       s.offset = s.items.length;
       if (state.user) setUser({ ...state.user, quota: data.quota });
       renderResults(data);
-      const pending = data.items.some((p) => p.site_status === 'pending');
-      if (pending && !append && s.polls < 6) {
+      // Collecte encore en cours (sources lentes) ou audits de sites en attente : on rafraîchit
+      // la liste sans effacer ce qui est déjà affiché.
+      const collecting = Boolean(data.search?.pending);
+      const auditing = data.items.some((p) => p.site_status === 'pending');
+      if ((collecting || auditing) && !append && s.polls < 12) {
         s.polls++;
-        setTimeout(() => mine === searchSeq && state.view === 'search' && runSearch({ silent: true }), 7000);
+        setTimeout(() => mine === searchSeq && state.view === 'search' && runSearch({ silent: true }), collecting ? 3000 : 7000);
       }
     } catch (e) {
       if (mine !== searchSeq) return;
@@ -333,9 +336,15 @@
     $('#results-head').hidden = false;
     $('#results-title').textContent = `${fmt(s.total)} ${t ? t.plural : 'entreprises'} à ${data.commune.nom}`;
     const sub = [];
-    if (data.search?.fetched_at) sub.push(`Données mises à jour le ${fmtDate(data.search.fetched_at)}`);
+    if (data.search?.pending) sub.push('Recherche en cours, la liste se complète automatiquement…');
+    else if (data.search?.fetched_at) sub.push(`Données mises à jour le ${fmtDate(data.search.fetched_at)}`);
     if (data.search?.errors?.length) sub.push(`Source partiellement indisponible : ${data.search.errors.join(' ; ')}`);
     $('#results-sub').textContent = sub.join(' · ');
+    if (!s.items.length && data.search?.pending) {
+      $('#results').innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Interrogation d’OpenStreetMap… les résultats s’affichent dès qu’ils arrivent.</div>`;
+      $('#more-btn').hidden = true;
+      return;
+    }
     if (!s.items.length) {
       $('#results').innerHTML = `<div class="empty"><p><strong>Aucune entreprise pour ces critères.</strong></p><p>Essayez un autre métier, une commune voisine plus grande, ou retirez les filtres.</p></div>`;
       $('#more-btn').hidden = true;

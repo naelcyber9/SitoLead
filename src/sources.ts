@@ -81,7 +81,13 @@ export async function communeByCode(code: string): Promise<Commune | null> {
 
 // --- OpenStreetMap ------------------------------------------------------------
 
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+const OSM_BUDGET_MS = 30_000;
 
 export interface OsmElement {
   type: string;
@@ -119,22 +125,34 @@ export function osmToProspect(el: OsmElement, cityName: string): RawProspect | n
 
 export async function fetchOsm(commune: Commune, trade: Trade): Promise<RawProspect[]> {
   const [k, v] = trade.osm;
-  const query = `[out:json][timeout:40];area["ref:INSEE"="${commune.code}"]["boundary"="administrative"]->.a;nwr["${k}"="${v}"]["name"](area.a);out center tags 500;`;
-  let lastErr: unknown;
-  for (const [i, endpoint] of OVERPASS.entries()) {
-    try {
-      const data = await getJson<{ elements: OsmElement[] }>(
-        endpoint,
-        { method: 'POST', body: new URLSearchParams({ data: query }), headers: { 'content-type': 'application/x-www-form-urlencoded' } },
-        45_000,
-      );
-      return data.elements.map((e) => osmToProspect(e, commune.nom)).filter((p): p is RawProspect => p !== null);
-    } catch (e) {
-      lastErr = e;
-      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
-    }
+  const query = `[out:json][timeout:25];area["ref:INSEE"="${commune.code}"]["boundary"="administrative"]->.a;nwr["${k}"="${v}"]["name"](area.a);out center tags 500;`;
+  // Les serveurs Overpass publics sont souvent saturés : on les interroge tous en même temps,
+  // le premier qui répond gagne et les autres requêtes sont annulées.
+  const stop = new AbortController();
+  const deadline = AbortSignal.timeout(OSM_BUDGET_MS);
+  const signal = AbortSignal.any([stop.signal, deadline]);
+  try {
+    const data = await Promise.any(
+      OVERPASS.map(async (endpoint) => {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          body: new URLSearchParams({ data: query }),
+          signal,
+          headers: { 'user-agent': UA, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        });
+        if (!res.ok) throw new Error(`${new URL(endpoint).hostname} a répondu ${res.status}`);
+        const body = (await res.json()) as { elements?: OsmElement[]; remark?: string };
+        // Overpass renvoie 200 avec une « remark » quand la requête a expiré côté serveur.
+        if (!body.elements || (body.remark && /timed out|out of memory/i.test(body.remark))) throw new Error('réponse incomplète');
+        return body.elements;
+      }),
+    );
+    return data.map((e) => osmToProspect(e, commune.nom)).filter((p): p is RawProspect => p !== null);
+  } catch {
+    throw new Error(deadline.aborted ? 'OpenStreetMap ne répond pas (serveurs saturés), réessayez plus tard' : 'OpenStreetMap indisponible');
+  } finally {
+    stop.abort();
   }
-  throw new Error(`OpenStreetMap indisponible (${(lastErr as Error)?.message ?? 'erreur'})`);
 }
 
 // --- SIRENE : entreprises récentes ---------------------------------------------

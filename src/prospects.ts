@@ -181,9 +181,14 @@ export interface SearchInfo {
   found: number;
   errors: string[];
   fresh: boolean;
+  /** Collecte encore en cours : les résultats affichés sont partiels. */
+  pending?: boolean;
 }
 
 const inflight = new Map<string, Promise<SearchInfo>>();
+
+/** Vrai tant qu'une collecte est en cours pour cette commune et ce métier. */
+export const isSearching = (cityCode: string, trade: string): boolean => inflight.has(`${cityCode}|${trade}`);
 
 export function searchInfo(db: DB, cityCode: string, trade: string): SearchInfo | null {
   const r = db.prepare('SELECT * FROM searches WHERE key = ?').get(`${cityCode}|${trade}`) as
@@ -202,24 +207,32 @@ export async function refreshSearch(db: DB, commune: Commune, tradeSlug: string,
   const running = inflight.get(key);
   if (running) return running;
   const job = (async () => {
-    const [osm, sirene] = await Promise.allSettled([fetchOsm(commune, trade), fetchSirene(commune, trade)]);
+    // Chaque source est enregistrée dès qu'elle répond : SIRENE (rapide) n'attend pas
+    // OpenStreetMap (souvent lent), et l'écran peut afficher les premiers résultats.
+    // L'ordre n'importe pas : upsertProspects fusionne les fiches par SIRET dans les deux sens,
+    // et addOptOuts supprime aussi les fiches déjà enregistrées.
     const errors: string[] = [];
-    const raws: RawProspect[] = [];
-    if (osm.status === 'fulfilled') raws.push(...osm.value);
-    else errors.push((osm.reason as Error).message);
-    if (sirene.status === 'fulfilled') {
-      raws.push(...sirene.value.prospects);
-      // Les entreprises opposées à la prospection sont écartées, y compris leurs fiches OpenStreetMap.
-      addOptOuts(db, sirene.value.optOuts.map((s) => `siren:${s}`), 'Opposition à la prospection commerciale (registre SIRENE)');
-    } else errors.push((sirene.reason as Error).message);
-    // OSM d'abord : quand un SIRET est commun, la fiche OSM (avec contacts) sert de base.
-    const found = upsertProspects(db, raws, trade.slug, commune.code);
+    let found = 0;
+    const save = (raws: RawProspect[]) => {
+      found += upsertProspects(db, raws, trade.slug, commune.code);
+      scheduleAudits(db);
+    };
+    await Promise.all([
+      fetchSirene(commune, trade).then(
+        (r) => {
+          // Les entreprises opposées à la prospection sont écartées, y compris leurs fiches OpenStreetMap.
+          addOptOuts(db, r.optOuts.map((s) => `siren:${s}`), 'Opposition à la prospection commerciale (registre SIRENE)');
+          save(r.prospects);
+        },
+        (e: Error) => errors.push(e.message),
+      ),
+      fetchOsm(commune, trade).then(save, (e: Error) => errors.push(e.message)),
+    ]);
     const fetched = nowIso();
     db.prepare(
       `INSERT INTO searches (key, city_code, city_name, trade, fetched_at, found, errors) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at, found = excluded.found, errors = excluded.errors, city_name = excluded.city_name`,
     ).run(key, commune.code, commune.nom, trade.slug, fetched, found, errors.length ? JSON.stringify(errors) : null);
-    scheduleAudits(db);
     return { fetched_at: fetched, found, errors, fresh: true };
   })().finally(() => inflight.delete(key));
   inflight.set(key, job);

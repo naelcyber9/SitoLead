@@ -238,9 +238,9 @@ export function homePage(appUrl: string, totals: { prospects: number; nosite: nu
 <section class="section wrap">
   <h2>Un seul client signé rembourse des mois d’abonnement</h2>
   <div class="roi">
-    <div><p class="big">${PLANS.pro.priceEur} €</p><p class="muted">par mois pour ${PLANS.pro.unlocks} entreprises qualifiées</p></div>
-    <div><p class="big">1 000 à 2 000 €</p><p class="muted">prix courant d’un site vitrine pour un artisan</p></div>
-    <div><p class="big">1 sur ${PLANS.pro.unlocks}</p><p class="muted">signé par mois suffit pour être rentable</p></div>
+    <div><p class="big">${PLANS.pro.priceEur} €</p><p class="muted">Par mois pour ${PLANS.pro.unlocks} entreprises qualifiées</p></div>
+    <div><p class="big">1 000 à 2 000 €</p><p class="muted">Le prix courant d’un site vitrine pour un artisan</p></div>
+    <div><p class="big">1 sur ${PLANS.pro.unlocks}</p><p class="muted">Un seul client signé par mois suffit pour être rentable</p></div>
   </div>
 </section>
 
@@ -253,7 +253,7 @@ export function homePage(appUrl: string, totals: { prospects: number; nosite: nu
 <section class="section wrap">
   <h2>Trouvez des clients dans votre ville</h2>
   <div class="link-grid">${CITIES.map((c) => `<a href="/prospection/${c.slug}">${esc(c.name)}</a>`).join('')}</div>
-  <h2 class="mt">Par métier</h2>
+  <h2 class="mt">Trouvez des clients par métier</h2>
   <div class="link-grid">${TRADES.map((t) => `<a href="/metiers/${t.slug}">Sites pour ${esc(t.plural)}</a>`).join('')}</div>
 </section>
 
@@ -268,8 +268,10 @@ ${faq.html}
 </section>`;
 
   return layout(appUrl, {
-    title: `${BRAND} : ${TAGLINE.toLowerCase()}`,
-    description: `Trouvez des clients pour votre agence web ou activité de freelance : entreprises sans site ou avec un site à refaire près de chez vous, audit, coordonnées et messages prêts. ${FREE_UNLOCKS} prospects offerts.`,
+    // Mot-clé en tête, marque à la fin, moins de 60 caractères : c'est ce que Google affiche.
+    title: `Trouver des clients pour votre agence web | ${BRAND}`,
+    // Moins de 160 caractères pour ne pas être coupée dans les résultats Google.
+    description: `Vous créez des sites ? ${BRAND} trouve les entreprises sans site ou au site à refaire près de chez vous : coordonnées, audit, messages prêts. ${FREE_UNLOCKS} offertes.`,
     path: '/',
     body,
     jsonLd: [

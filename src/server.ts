@@ -13,8 +13,11 @@ import {
 import { CITIES, TRADES, cityByCode, cityBySlug, tradeBySlug } from './catalog.ts';
 import { nowIso, openDatabase, type DB } from './db.ts';
 import {
-  LEAD_STATUSES, cityStats, getLead, leadsCsv, listLeads, listProspects, refreshSearch, scheduleAudits, searchInfo, unlockProspect, updateLead,
+  LEAD_STATUSES, cityStats, getLead, isSearching, leadsCsv, listLeads, listProspects, refreshSearch, scheduleAudits, searchInfo, unlockProspect, updateLead,
 } from './prospects.ts';
+
+/** Temps maximal d'attente des sources avant de renvoyer des résultats partiels. */
+const SEARCH_WAIT_MS = 3000;
 import { buildPitch } from './scoring.ts';
 import * as seo from './seo.ts';
 import { communeByCode, searchCommunes, type Commune } from './sources.ts';
@@ -319,8 +322,15 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
         let info = searchInfo(db, commune.code, trade);
         if (live) {
-          if (!info || (info.errors.length && info.found === 0)) info = await refreshSearch(db, commune, trade, { live, force: Boolean(info) });
-          else if (!info.fresh) void refreshSearch(db, commune, trade, { live }).catch(() => {});
+          if (!info || (info.errors.length && info.found === 0)) {
+            // On n'attend pas les sources lentes : au-delà de quelques secondes, on renvoie ce qui
+            // est déjà enregistré et l'écran redemande tant que `pending` est vrai.
+            const job = refreshSearch(db, commune, trade, { live, force: Boolean(info) });
+            job.catch(() => {});
+            const done = await Promise.race([job.catch(() => null), new Promise<null>((r) => setTimeout(r, SEARCH_WAIT_MS, null))]);
+            info = done ?? searchInfo(db, commune.code, trade);
+          } else if (!info.fresh) void refreshSearch(db, commune, trade, { live }).catch(() => {});
+          if (isSearching(commune.code, trade)) info = { ...(info ?? { fetched_at: null, found: 0, errors: [], fresh: false }), pending: true };
         }
         const list = listProspects(db, u.id, {
           cityCode: commune.code,
