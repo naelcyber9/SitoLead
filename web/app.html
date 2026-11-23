@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mon espace | Sitolead</title>
+<meta name="description" content="Trouvez des entreprises sans site, débloquez leurs coordonnées et contactez-les avec un message prêt à envoyer.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#14231f">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body class="app-body">
+<a class="skip" href="#contenu">Aller au contenu</a>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="logo" href="/"><span class="logo-mark" aria-hidden="true">S</span>Sitolead</a>
+    <nav class="app-nav" id="app-nav" aria-label="Navigation de l’application" hidden>
+      <button type="button" data-view="search">Trouver des clients</button>
+      <button type="button" data-view="leads">Mes prospects</button>
+      <button type="button" data-view="billing">Abonnement</button>
+      <button type="button" data-view="profile">Profil</button>
+    </nav>
+    <span class="quota-pill" id="quota-pill" hidden></span>
+  </div>
+</header>
+
+<main id="contenu">
+  <div class="wrap loading" id="boot"><span class="spinner" aria-hidden="true"></span>Chargement…</div>
+
+  <!-- Connexion / inscription -->
+  <section class="wrap auth" id="view-auth" hidden>
+    <div>
+      <p class="eyebrow">Vous créez des sites, on vous trouve les clients</p>
+      <h1>Vos 5 premiers clients potentiels sont offerts</h1>
+      <p class="lead">Choisissez une ville et un métier : nous trouvons les entreprises sans site ou avec un site à refaire, et nous écrivons le message pour les contacter.</p>
+      <ul class="checks">
+        <li>5 entreprises débloquées gratuitement, sans carte bancaire</li>
+        <li>Audit de leur site et score d’opportunité</li>
+        <li>Email, script d’appel et SMS personnalisés</li>
+      </ul>
+    </div>
+    <div class="auth-card">
+      <div class="tabs" role="tablist" aria-label="Connexion ou inscription">
+        <button type="button" role="tab" id="tab-signup" aria-controls="form-signup" aria-selected="true">Créer un compte</button>
+        <button type="button" role="tab" id="tab-login" aria-controls="form-login" aria-selected="false">Se connecter</button>
+      </div>
+      <form id="form-signup" role="tabpanel" aria-labelledby="tab-signup" novalidate>
+        <label class="field"><span>Email professionnel</span><input type="email" name="email" autocomplete="email" required></label>
+        <label class="field"><span>Mot de passe (8 caractères minimum)</span><input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+        <label class="check"><input type="checkbox" name="terms" required><span>J’accepte les <a href="/cgv" target="_blank" rel="noopener">conditions générales</a> et je m’engage à respecter les règles de prospection (RGPD).</span></label>
+        <p class="form-error" role="alert"></p>
+        <button class="btn btn-lg" type="submit">Créer mon compte gratuit</button>
+      </form>
+      <form id="form-login" role="tabpanel" aria-labelledby="tab-login" novalidate hidden>
+        <label class="field"><span>Email</span><input type="email" name="email" autocomplete="email" required></label>
+        <label class="field"><span>Mot de passe</span><input type="password" name="password" autocomplete="current-password" required></label>
+        <p class="form-error" role="alert"></p>
+        <button class="btn btn-lg" type="submit">Se connecter</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Recherche -->
+  <section class="wrap view" id="view-search" hidden>
+    <div id="search-notice"></div>
+    <h1>Trouver des clients</h1>
+    <form class="panel" id="search-form" novalidate>
+      <div class="searchbar">
+        <div class="field combo">
+          <span id="city-label">Ville ou code postal</span>
+          <input type="search" id="city-input" autocomplete="off" placeholder="Ex. Annecy, 69003…" role="combobox"
+            aria-labelledby="city-label" aria-autocomplete="list" aria-expanded="false" aria-controls="city-list" required>
+          <ul class="combo-list" id="city-list" role="listbox" aria-labelledby="city-label" hidden></ul>
+        </div>
+        <label class="field"><span>Métier</span><select id="trade-select" required></select></label>
+        <button class="btn btn-lg" type="submit">Chercher</button>
+      </div>
+      <div class="filters" role="group" aria-label="Filtres">
+        <button type="button" class="chip" data-status="all" aria-pressed="true">Tous</button>
+        <button type="button" class="chip" data-status="nosite" aria-pressed="false">Sans site</button>
+        <button type="button" class="chip" data-status="weak" aria-pressed="false">Site à refaire</button>
+        <button type="button" class="chip" data-status="recent" aria-pressed="false">Créées récemment</button>
+        <label>Score minimum
+          <select id="min-select">
+            <option value="0">Tous</option>
+            <option value="60">60+</option>
+            <option value="75">75+</option>
+            <option value="85">85+</option>
+          </select>
+        </label>
+      </div>
+    </form>
+    <div class="results-head" id="results-head" hidden>
+      <h2 id="results-title"></h2>
+      <p class="small muted" id="results-sub"></p>
+    </div>
+    <div id="results" class="results" aria-live="polite"></div>
+    <div class="more"><button type="button" class="btn btn-ghost" id="more-btn" hidden>Voir plus d’entreprises</button></div>
+  </section>
+
+  <!-- Pipeline -->
+  <section class="wrap view" id="view-leads" hidden>
+    <div class="pipeline-head">
+      <h1>Mes prospects</h1>
+      <div class="row">
+        <label class="small">Statut
+          <select id="lead-filter"><option value="">Tous</option></select>
+        </label>
+        <button type="button" class="btn btn-ghost btn-sm" id="csv-btn">Exporter en CSV</button>
+      </div>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div id="leads"></div>
+  </section>
+
+  <!-- Abonnement -->
+  <section class="wrap view" id="view-billing" hidden>
+    <div id="billing-notice"></div>
+    <h1>Abonnement</h1>
+    <div class="panel">
+      <p><strong id="plan-name"></strong> <span class="muted" id="plan-meta"></span></p>
+      <div class="quota-bar" aria-hidden="true"><span id="quota-bar"></span></div>
+      <p class="small muted" id="quota-text"></p>
+      <button type="button" class="btn btn-ghost btn-sm" id="portal-btn" hidden>Gérer mon abonnement et mes factures</button>
+    </div>
+    <div class="plans" id="plans"></div>
+  </section>
+
+  <!-- Profil -->
+  <section class="wrap view narrow" id="view-profile" hidden>
+    <h1>Profil</h1>
+    <form class="panel" id="profile-form" novalidate>
+      <p class="muted">Ces informations signent vos messages de prospection.</p>
+      <div class="grid-2">
+        <label class="field"><span>Prénom et nom</span><input type="text" name="full_name" autocomplete="name" maxlength="100"></label>
+        <label class="field"><span>Nom de l’agence ou de l’activité</span><input type="text" name="agency_name" autocomplete="organization" maxlength="100"></label>
+        <label class="field"><span>Téléphone</span><input type="tel" name="phone" autocomplete="tel" maxlength="30"></label>
+        <label class="field"><span>Site ou portfolio</span><input type="url" name="website" autocomplete="url" placeholder="https://…" maxlength="200"></label>
+      </div>
+      <p class="form-error" role="alert"></p>
+      <button class="btn" type="submit">Enregistrer</button>
+    </form>
+    <div class="panel">
+      <p><strong>Compte</strong> <span class="muted" id="account-email"></span></p>
+      <div class="row">
+        <button type="button" class="btn btn-ghost btn-sm" id="logout-btn">Se déconnecter</button>
+        <button type="button" class="btn btn-danger btn-sm" id="delete-btn">Supprimer mon compte</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Fiche prospect -->
+<dialog id="lead-dialog" aria-labelledby="lead-title">
+  <div class="dialog-head">
+    <div><h2 id="lead-title"></h2><p class="muted small" id="lead-sub"></p></div>
+    <button type="button" class="close" data-close aria-label="Fermer">×</button>
+  </div>
+  <div class="dialog-body" id="lead-body"></div>
+</dialog>
+
+<!-- Passage à l'offre payante -->
+<dialog id="upgrade-dialog" aria-labelledby="upgrade-title">
+  <div class="dialog-head">
+    <h2 id="upgrade-title">Continuez à trouver des clients</h2>
+    <button type="button" class="close" data-close aria-label="Fermer">×</button>
+  </div>
+  <div class="dialog-body">
+    <p id="upgrade-text" class="lead"></p>
+    <div class="plans" id="upgrade-plans"></div>
+  </div>
+</dialog>
+
+<!-- Suppression du compte -->
+<dialog id="delete-dialog" aria-labelledby="delete-title">
+  <form method="dialog" id="delete-form" class="dialog-body" novalidate>
+    <h2 id="delete-title">Supprimer mon compte</h2>
+    <p>Votre compte, vos prospects et vos notes seront définitivement supprimés.</p>
+    <label class="field"><span>Confirmez avec votre mot de passe</span><input type="password" name="password" autocomplete="current-password" required></label>
+    <p class="form-error" role="alert"></p>
+    <div class="row">
+      <button type="button" class="btn btn-ghost" data-close>Annuler</button>
+      <button type="submit" class="btn btn-danger">Supprimer définitivement</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
