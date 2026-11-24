@@ -899,6 +899,8 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     $('#mockup-title').textContent = m.data.name;
     $('#mockup-sub').textContent = `${mockupState(m)} · ${m.active ? `expire le ${fmtDate(m.expires_at)} · ` : ''}${fmt(m.views)} visite${m.views > 1 ? 's' : ''}`;
     $('#mockup-open').href = m.url;
+    // Le téléchargement reprend la dernière version enregistrée.
+    $('#mockup-export').href = `/api/mockups/${encodeURIComponent(m.id)}/export`;
     $('#mockup-open').hidden = !m.active;
     $('#mockup-copy').disabled = !m.active;
     $('#mockup-revoke').textContent = m.revoked ? 'Réactiver le lien' : 'Révoquer le lien';

@@ -173,6 +173,10 @@ test('API : envoi d’image, affichage dans la maquette, propriété vérifiée,
   const saved = await call('PATCH', `/api/mockups/${m.id}`, { data: { ...m.data, photo: up.data.id } });
   assert.equal(saved.data.mockup.data.photo, up.data.id);
   assert.match((await call('GET', `/p/${m.id}`)).data, new RegExp(`/media/${up.data.id}`));
+  // Site téléchargé : la photo est intégrée au fichier (aucune dépendance au serveur SitoLead)
+  const exported = (await call('GET', `/api/mockups/${m.id}/export`)).data as string;
+  assert.match(exported, /src="data:image\/jpeg;base64,/);
+  assert.doesNotMatch(exported, /\/media\//);
 
   // IA : suggestion renvoyée à l'éditeur, maquette inchangée tant qu'on n'enregistre pas
   const ai = await call('POST', `/api/mockups/${m.id}/ia`, { tone: 'chaleureux' });

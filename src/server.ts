@@ -661,6 +661,26 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         const m = setRevoked(db, u.id, id, (await readJson(req)).revoked === true);
         return json(res, 200, { mockup: mockupView(m!, appUrl) });
       }
+      // Téléchargement du site (client signé) : fichier HTML autonome, images intégrées,
+      // sans bandeau « proposition » ; le développeur l'héberge où il veut.
+      if (parts.length === 4 && parts[3] === 'export' && method === 'GET') {
+        const d = parseData(own);
+        const images: Record<string, string> = {};
+        for (const id of [d.logo, d.photo]) {
+          if (!id || images[id]) continue;
+          const m = await readMedia(db, id);
+          if (m) images[id] = `data:${m.mime};base64,${m.data.toString('base64')}`;
+        }
+        const slug = d.name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'site';
+        logEvent(db, u.id, own.prospect_id, 'mockup', `export:${own.id}`);
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'content-disposition': `attachment; filename="${slug}.html"`,
+          'x-content-type-options': 'nosniff',
+          'cache-control': 'no-store',
+        });
+        return void res.end(renderMockup(d, creatorOf(u), { exportMode: true, images }));
+      }
       // Aperçu dans l'éditeur : même si le lien est expiré ou révoqué, sans compter de visite.
       if (parts.length === 4 && parts[3] === 'apercu' && method === 'GET') {
         res.writeHead(200, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });

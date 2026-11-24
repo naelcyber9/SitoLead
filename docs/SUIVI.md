@@ -72,10 +72,16 @@ Tests : **44 tests, 44 réussis** · TypeScript : **aucune erreur** · essai ré
 
 Tests : **56 tests, 56 réussis** · TypeScript : **aucune erreur**.
 
-## Phase 4 — Hébergement des sites vendus ⬜
+## Phase 4 — Sites vendus : export seulement ✅ (décision du 24/11/2026)
 
-Conversion maquette → site, export, hébergement mutualisé, domaine personnalisé + SSL, choix du payeur,
-facturation distincte de la prospection.
+SitoLead reste un outil de prospection : une fois le client signé, le développeur construit et héberge
+le site comme il le souhaite. L'hébergement des sites clients par SitoLead (domaines, SSL, facturation
+de l'hébergement, choix du payeur) n'est **pas** développé ; il pourra l'être si des utilisateurs le demandent.
+
+| Élément | État | Détail |
+|---|---|---|
+| Télécharger la maquette en HTML | ✅ | Fichier autonome (styles et images intégrés), sans bandeau « proposition », indexable ; commentaire indiquant où brancher le formulaire de contact. Réservé au propriétaire |
+| Hébergement par SitoLead | ✖ | Écarté pour l'instant (coûts fixes et responsabilité sans revenu garanti) |
 
 ## Phase 5 — Finalisation ⬜
 

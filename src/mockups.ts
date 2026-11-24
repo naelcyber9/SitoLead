@@ -251,7 +251,19 @@ export function textOn(hex: string): string {
 
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
-export function renderMockup(d: MockupData, creator: Creator): string {
+export interface RenderOptions {
+  /**
+   * Site livré au client (téléchargement) : pas de bandeau « proposition », indexable, images
+   * intégrées au fichier, formulaire à brancher par le développeur.
+   */
+  exportMode?: boolean;
+  /** Images intégrées (identifiant de média → data URI), utilisées à la place de /media/<id>. */
+  images?: Record<string, string>;
+}
+
+export function renderMockup(d: MockupData, creator: Creator, opts: RenderOptions = {}): string {
+  const ex = Boolean(opts.exportMode);
+  const img = (id: string) => opts.images?.[id] ?? `/media/${id}`;
   const on = textOn(d.primary);
   const creatorContact = [
     creator.email ? `<a href="mailto:${esc(creator.email)}?subject=${esc(encodeURIComponent(`Proposition de site pour ${d.name}`))}">Contacter ${esc(creator.name)}</a>` : '',
@@ -276,8 +288,7 @@ export function renderMockup(d: MockupData, creator: Creator): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow, noarchive">
-<title>${esc(d.name)}${d.tagline ? ` | ${esc(d.tagline)}` : ''}</title>
+${ex ? '' : '<meta name="robots" content="noindex, nofollow, noarchive">\n'}<title>${esc(d.name)}${d.tagline ? ` | ${esc(d.tagline)}` : ''}</title>
 <meta name="description" content="${esc((d.about || d.tagline).slice(0, 155))}">
 <script type="application/ld+json">${JSON.stringify(ld).replace(/</g, '\\u003c')}</script>
 <style>
@@ -305,20 +316,20 @@ footer{background:#1d1d1f;color:#d6d6d6;padding:28px 0;font-size:.85rem}
 </style>
 </head>
 <body>
-<div class="proposal" role="note"><div class="wrap"><span>Proposition de site réalisée par ${esc(creator.name)}, <strong>non officielle</strong> : ce n’est pas le site de ${esc(d.name)}.</span>${creatorContact ? `<span>${creatorContact}</span>` : ''}</div></div>
-<header class="top"><div class="wrap"><a class="brand" href="#accueil">${d.logo ? `<img class="logo" src="/media/${esc(d.logo)}" alt="">` : ''}${esc(d.name)}</a>${d.phone ? `<a class="btn" href="${esc(telHref(d.phone))}">${esc(d.phone)}</a>` : `<a class="btn" href="#contact">${esc(d.cta)}</a>`}</div></header>
+${ex ? '' : `<div class="proposal" role="note"><div class="wrap"><span>Proposition de site réalisée par ${esc(creator.name)}, <strong>non officielle</strong> : ce n’est pas le site de ${esc(d.name)}.</span>${creatorContact ? `<span>${creatorContact}</span>` : ''}</div></div>
+`}<header class="top"><div class="wrap"><a class="brand" href="#accueil">${d.logo ? `<img class="logo" src="${esc(img(d.logo))}" alt="">` : ''}${esc(d.name)}</a>${d.phone ? `<a class="btn" href="${esc(telHref(d.phone))}">${esc(d.phone)}</a>` : `<a class="btn" href="#contact">${esc(d.cta)}</a>`}</div></header>
 <main>
 <div class="hero" id="accueil"><div class="wrap"><div><h1>${esc(d.tagline || d.name)}</h1>${d.area ? `<p>${esc(d.area)}</p>` : ''}<a class="btn" href="#contact">${esc(d.cta)}</a></div>${
-    d.photo ? `<img class="hero-photo" src="/media/${esc(d.photo)}" alt="">` : `<svg viewBox="0 0 120 120" aria-hidden="true">${ART[d.art]}</svg>`
+    d.photo ? `<img class="hero-photo" src="${esc(img(d.photo))}" alt="">` : `<svg viewBox="0 0 120 120" aria-hidden="true">${ART[d.art]}</svg>`
   }</div></div>
 ${d.sections.about && d.about ? `<section id="presentation"><div class="wrap"><h2>Présentation</h2><p>${esc(d.about)}</p></div></section>` : ''}
 ${d.sections.services && d.services.length ? `<section class="alt" id="prestations"><div class="wrap"><h2>Prestations</h2><ul class="services">${d.services.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div></section>` : ''}
 ${d.sections.area && d.area ? `<section id="zone"><div class="wrap"><h2>Zone d’intervention</h2><p>${esc(d.area)}</p></div></section>` : ''}
 ${d.sections.hours && d.hours ? `<section class="alt" id="horaires"><div class="wrap"><h2>Horaires</h2><p class="hours">${esc(d.hours)}</p></div></section>` : ''}
 ${d.sections.contact ? `<section id="contact"><div class="wrap"><h2>Contact</h2><div class="contact-grid"><div>${contactLines || '<p>Coordonnées à compléter.</p>'}</div>
-<form aria-describedby="demo-note"><label>Nom<input name="n" autocomplete="off"></label><label>Téléphone ou email<input name="c" autocomplete="off"></label><label>Votre demande<textarea name="m" rows="4"></textarea></label><button class="btn" type="button" disabled>${esc(d.cta)}</button><p class="demo-note" id="demo-note">Formulaire de démonstration : aucun message n’est envoyé depuis cette maquette.</p></form></div></div></section>` : ''}
+${ex ? '<!-- Formulaire à brancher : ajoutez action="..." et method="post" vers votre service d’envoi, puis activez le bouton (retirez disabled et mettez type="submit"). -->' : ''}<form aria-describedby="demo-note"><label>Nom<input name="n" autocomplete="off"></label><label>Téléphone ou email<input name="c" autocomplete="off"></label><label>Votre demande<textarea name="m" rows="4"></textarea></label><button class="btn" type="button" disabled>${esc(d.cta)}</button><p class="demo-note" id="demo-note">${ex ? 'Formulaire bientôt disponible : contactez-nous par téléphone ou par email.' : 'Formulaire de démonstration : aucun message n’est envoyé depuis cette maquette.'}</p></form></div></div></section>` : ''}
 </main>
-<footer><div class="wrap">${esc(d.name)} · Maquette de démonstration, non officielle, réalisée par ${esc(creator.name)}.</div></footer>
+<footer><div class="wrap">${ex ? `© ${new Date().getFullYear()} ${esc(d.name)}` : `${esc(d.name)} · Maquette de démonstration, non officielle, réalisée par ${esc(creator.name)}.`}</div></footer>
 </body>
 </html>`;
 }

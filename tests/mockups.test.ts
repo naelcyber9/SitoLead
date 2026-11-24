@@ -184,6 +184,16 @@ test('API : création réservée aux fiches débloquées, page publique non inde
   assert.equal(preview.status, 200);
   assert.equal(preview.headers.get('x-frame-options'), 'SAMEORIGIN');
 
+  // Téléchargement du site : autonome, sans bandeau « proposition », indexable
+  const exp = await fetch(`${base}/api/mockups/${m.id}/export`, { headers: { cookie } });
+  assert.equal(exp.status, 200);
+  assert.match(exp.headers.get('content-disposition') ?? '', /attachment; filename="plomberie-du-lac\.html"/);
+  const site = await exp.text();
+  assert.doesNotMatch(site, /non officielle/);
+  assert.doesNotMatch(site, /noindex/);
+  assert.match(site, /Dépannage &lt;b&gt;rapide&lt;\/b&gt;/);
+  assert.match(site, /Formulaire à brancher/);
+
   // Isolation : un autre compte ne voit, ne modifie ni ne supprime la maquette
   const leo = makeUser(db, 'leo@atelier.fr');
   cookie = `sid=${createSession(db, leo.id)}`;
@@ -191,6 +201,7 @@ test('API : création réservée aux fiches débloquées, page publique non inde
   assert.equal((await call('PATCH', `/api/mockups/${m.id}`, { data: {} })).status, 404);
   assert.equal((await call('DELETE', `/api/mockups/${m.id}`, {})).status, 404);
   assert.equal((await call('GET', `/api/mockups/${m.id}/apercu`)).status, 404);
+  assert.equal((await call('GET', `/api/mockups/${m.id}/export`)).status, 404);
   assert.equal((await call('GET', '/api/mockups')).data.items.length, 0);
   cookie = ninaCookie;
   assert.equal((await call('DELETE', `/api/mockups/${m.id}`, {})).status, 200);
