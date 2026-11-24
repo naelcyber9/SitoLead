@@ -103,6 +103,30 @@ CREATE TABLE IF NOT EXISTS collect_queue (
   PRIMARY KEY (city_code, trade)
 );
 
+-- Maquettes de sites : contenu éditable (JSON), servi sur /p/<id>. L'id (128 bits aléatoires)
+-- est le secret du lien de partage. expires_at / revoked_at contrôlent l'accès public.
+CREATE TABLE IF NOT EXISTS mockups (
+  id             TEXT PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Une opposition / demande de suppression de l'entreprise supprime aussi ses maquettes.
+  prospect_id    TEXT NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  data           TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  expires_at     TEXT NOT NULL,
+  revoked_at     TEXT,
+  views          INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mockups_user ON mockups (user_id, updated_at);
+
+-- Journal des créations de maquettes (quota) : indépendant des suppressions.
+CREATE TABLE IF NOT EXISTS mockup_events (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mockup_events ON mockup_events (user_id, created_at);
+
 -- Paramètres internes (versions de barème, etc.).
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,

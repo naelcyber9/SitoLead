@@ -19,6 +19,8 @@ export interface Plan {
    * sources même sans déblocage : elle est donc plafonnée, y compris sur les offres payantes.
    */
   searchesPerDay: number;
+  /** Maquettes créées : au total pour l'offre gratuite, par mois sinon. */
+  mockups: number;
   features: string[];
 }
 
@@ -33,7 +35,8 @@ export const PLANS: Record<PlanId, Plan> = {
     monthly: false,
     csv: false,
     searchesPerDay: 20,
-    features: [`${FREE_UNLOCKS} entreprises offertes avec coordonnées`, 'Audit complet de leur site', 'Messages de prospection prêts à envoyer', 'Suivi des prospects'],
+    mockups: 1,
+    features: [`${FREE_UNLOCKS} entreprises offertes avec coordonnées`, '1 maquette de site offerte', 'Audit complet de leur site', 'Messages de prospection prêts à envoyer', 'Suivi des prospects'],
   },
   pro: {
     id: 'pro',
@@ -43,7 +46,8 @@ export const PLANS: Record<PlanId, Plan> = {
     monthly: true,
     csv: true,
     searchesPerDay: 200,
-    features: ['150 entreprises par mois', 'Toutes les villes et tous les métiers', 'Audit de site + score d’opportunité', 'Email, appel et SMS personnalisés', 'Pipeline de suivi + relances', 'Export CSV'],
+    mockups: 50,
+    features: ['150 entreprises par mois', '50 maquettes de site par mois', 'Toutes les villes et tous les métiers', 'Audit de site + score d’opportunité', 'Email, appel et SMS personnalisés', 'Pipeline de suivi + relances', 'Export CSV'],
   },
   agence: {
     id: 'agence',
@@ -53,7 +57,8 @@ export const PLANS: Record<PlanId, Plan> = {
     monthly: true,
     csv: true,
     searchesPerDay: 600,
-    features: ['1 000 entreprises par mois', 'Tout ce qui est inclus dans Pro', 'Idéal pour une équipe commerciale', 'Support prioritaire'],
+    mockups: 150,
+    features: ['1 000 entreprises par mois', '150 maquettes de site par mois', 'Tout ce qui est inclus dans Pro', 'Idéal pour une équipe commerciale', 'Support prioritaire'],
   },
 };
 

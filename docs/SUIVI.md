@@ -27,17 +27,24 @@ Mis à jour à chaque étape. Légende : ✅ terminé · 🟡 partiel · ⬜ à 
 
 Tests : **39 tests, 39 réussis** · vérification TypeScript : **aucune erreur** · essai réel dans le navigateur : recherche « plombiers, Haute-Savoie » avec carte, sans erreur console.
 
-## Phase 2 — Maquettes (fonctionnalité principale) ⬜
+## Phase 2 — Maquettes (fonctionnalité principale) 🟡
 
-| Élément | État |
-|---|---|
-| Moteur de templates mutualisé (pas de projet par prospect) | ⬜ |
-| Templates sectoriels (plomberie, électricité, climatisation, maçonnerie, couverture, paysagisme, auto, restauration, coiffure / esthétique, générique) | ⬜ |
-| Bouton « Générer une maquette » sur la fiche | ⬜ |
-| Éditeur (textes, couleurs, images, sections, coordonnées) | ⬜ |
-| Lien de prévisualisation unique, expiration, révocation, `noindex`, bandeau « proposition non officielle », contact du créateur | ⬜ |
-| Intégration du lien dans le mail de prospection, prix proposé | ⬜ |
-| Textes générés par IA (optionnel, sans invention) | ⬜ — nécessite une clé API (coût à valider) |
+| Élément | État | Détail |
+|---|---|---|
+| Moteur de templates mutualisé | ✅ | `src/mockups.ts` : un seul moteur, contenu JSON en base, aucun projet ni déploiement par prospect |
+| Templates sectoriels | ✅ | Plomberie, électricité, climatisation, maçonnerie / bâtiment, couverture, paysagisme, automobile, restauration, coiffure / esthétique, commerce, services (générique). Métiers « climaticien » et « couvreur » ajoutés au catalogue |
+| Contenu honnête | ✅ | Données réelles du prospect ; prestations = suggestions à valider ; aucun avis, certification, tarif ni ancienneté ; horaires seulement si saisis ; test automatique |
+| Images | ✅ | Illustrations vectorielles maison (aucune image tierce). Envoi de photos / logo : ⬜ (nécessite un stockage de fichiers) |
+| « Générer une maquette » sur la fiche | ✅ | Réservé aux entreprises débloquées ; quota 1 (gratuit) / 50 / 150 par mois |
+| Éditeur | ✅ | Secteur, textes, prestations, zone, coordonnées, horaires, bouton, couleurs, illustration, sections ; aperçu ordinateur / mobile |
+| Lien de prévisualisation | ✅ | `/p/<id>` (128 bits aléatoires), sans compte ; expiration 7 / 30 / 90 jours ; révocation / réactivation ; `noindex` (balise, en-tête, robots.txt) ; bandeau « non officielle » + contact du créateur ; formulaire de démonstration ; compteur de visites (hors créateur) |
+| Sécurité de la page publique | ✅ | CSP dédiée sans script, contenu échappé, couleurs validées, affichage dans l'éditeur seulement depuis SitoLead |
+| Mail de prospection | ✅ | Lien de la maquette active inséré automatiquement, prix proposé, objet et texte modifiables avant envoi, copie ou ouverture de la messagerie |
+| RGPD | ✅ | Une demande de suppression de l'entreprise supprime aussi ses maquettes |
+| Textes générés par IA | ⛔ | Décision en attente : fournisseur et budget plafonné |
+| Envoi depuis SitoLead / messagerie connectée | ⬜ | Phase 3 (fournisseur transactionnel, liste de suppression, limites d'envoi) |
+
+Tests : **44 tests, 44 réussis** · TypeScript : **aucune erreur** · essai réel : génération, éditeur (ordinateur et mobile), page publique sans compte, aucune erreur console.
 
 ## Phase 3 — Commercialisation ⬜
 

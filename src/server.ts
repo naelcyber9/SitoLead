@@ -28,6 +28,29 @@ const DISPOSABLE = /@(yopmail\.(com|fr|net)|mailinator\.com|guerrillamail\.(com|
 import * as seo from './seo.ts';
 import { communeByCode, searchCommunes, type Commune } from './sources.ts';
 import { parseZone, planCollection, resolveZone, searchAreas, zoneCoverage } from './zones.ts';
+import {
+  ART_KEYS, EXPIRY_DAYS, countView, createMockup, deleteMockup, getMockup, listMockups, mockupQuota, mockupView, parseData, publicMockup,
+  renderMockup, sectorsForClient, setRevoked, unavailablePage, updateMockup, type Creator,
+} from './mockups.ts';
+
+/**
+ * Maquettes : page autonome (styles intégrés, aucun script exécuté), affichable dans l'aperçu
+ * de l'éditeur (même origine) mais jamais indexée.
+ */
+const MOCKUP_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'SAMEORIGIN',
+  'x-robots-tag': 'noindex, nofollow, noarchive',
+  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'self'; base-uri 'none'",
+  'cache-control': 'no-store',
+};
+
+const creatorOf = (u: Pick<UserRow, 'full_name' | 'agency_name' | 'email' | 'phone'>): Creator => ({
+  name: u.agency_name || u.full_name || 'un créateur de sites',
+  email: u.email,
+  phone: u.phone,
+});
 
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
 const MIME: Record<string, string> = {
@@ -155,6 +178,7 @@ function publicUser(db: DB, u: UserRow) {
     csv: plan.csv,
     hasBilling: Boolean(u.stripe_customer_id),
     quota: quotaFor(db, u),
+    mockupQuota: mockupQuota(db, u),
   };
 }
 
@@ -263,7 +287,35 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
           billing: stripeConfigured(),
           map: MAP,
           radii: [5, 10, 20, 30, 50],
+          sectors: sectorsForClient(),
+          artKeys: ART_KEYS,
+          expiryDays: EXPIRY_DAYS,
         });
+
+      case 'GET /api/mockups': {
+        const u = requireUser(req);
+        const prospect = url.searchParams.get('prospect') ?? undefined;
+        return json(res, 200, { items: listMockups(db, u.id, prospect).map((m) => mockupView(m, appUrl)), mockupQuota: mockupQuota(db, u) });
+      }
+
+      case 'POST /api/mockups': {
+        const u = requireUser(req);
+        const b = await readJson(req);
+        const lead = typeof b.prospect_id === 'string' ? getLead(db, u.id, b.prospect_id) : null;
+        if (!lead) throw new HttpError(404, 'Débloquez d’abord cette entreprise pour lui préparer une maquette');
+        const r = createMockup(db, u, lead);
+        if (!r.ok) {
+          const q = mockupQuota(db, u);
+          throw new HttpError(
+            402,
+            effectivePlan(u).monthly
+              ? `Vous avez créé vos ${q.limit} maquettes du mois. Passez à l’offre supérieure ou attendez le 1er du mois.`
+              : 'Votre maquette offerte est utilisée. Passez à l’offre Pro pour en créer d’autres.',
+            'upgrade',
+          );
+        }
+        return json(res, 201, { mockup: mockupView(r.mockup, appUrl), mockupQuota: mockupQuota(db, u) });
+      }
 
       case 'POST /api/signup':
       case 'POST /api/login': {
@@ -494,6 +546,31 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       }
       return json(res, 200, { prospect: r.prospect, already: r.already, quota: quotaFor(db, u) });
     }
+    if (parts[1] === 'mockups' && parts.length >= 3) {
+      const u = requireUser(req);
+      const id = parts[2]!;
+      const own = getMockup(db, u.id, id);
+      if (!own) throw new HttpError(404, 'Maquette introuvable');
+      if (parts.length === 3 && method === 'GET') return json(res, 200, { mockup: mockupView(own, appUrl) });
+      if (parts.length === 3 && method === 'PATCH') {
+        const b = await readJson(req);
+        const m = updateMockup(db, u.id, id, { data: b.data, expiresInDays: b.expiresInDays });
+        return json(res, 200, { mockup: mockupView(m!, appUrl) });
+      }
+      if (parts.length === 3 && method === 'DELETE') {
+        deleteMockup(db, u.id, id);
+        return json(res, 200, { ok: true });
+      }
+      if (parts.length === 4 && parts[3] === 'revoked' && method === 'PUT') {
+        const m = setRevoked(db, u.id, id, (await readJson(req)).revoked === true);
+        return json(res, 200, { mockup: mockupView(m!, appUrl) });
+      }
+      // Aperçu dans l'éditeur : même si le lien est expiré ou révoqué, sans compter de visite.
+      if (parts.length === 4 && parts[3] === 'apercu' && method === 'GET') {
+        res.writeHead(200, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+        return void res.end(renderMockup(parseData(own), creatorOf(u)));
+      }
+    }
     if (parts[1] === 'prospects' && parts.length === 4 && parts[3] === 'favorite' && method === 'PUT') {
       const u = requireUser(req);
       const on = (await readJson(req)).on === true;
@@ -529,9 +606,16 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       if (parts.length === 4 && parts[3] === 'pitch' && method === 'GET') {
         const lead = getLead(db, u.id, id);
         if (!lead) throw new HttpError(404, 'Prospect non débloqué');
+        // Lien de maquette : uniquement une maquette active de l'utilisateur pour ce prospect.
+        const mockupId = url.searchParams.get('mockup');
+        const mockup = mockupId ? getMockup(db, u.id, mockupId) : null;
+        const view = mockup && mockup.prospect_id === lead.id ? mockupView(mockup, appUrl) : null;
+        const price = (url.searchParams.get('price') ?? '').trim().slice(0, 60) || null;
         const pitch = buildPitch(
           { ...lead, audit_issues: lead.issues },
           { full_name: u.full_name, agency_name: u.agency_name, phone: u.phone, website: u.website, email: u.email },
+          new Date(),
+          { mockupUrl: view?.active ? view.url : null, price },
         );
         return json(res, 200, { pitch, profileComplete: Boolean(u.full_name && (u.phone || u.website)) });
       }
@@ -549,6 +633,19 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         nosite: number | null;
       };
       return html(res, 200, seo.homePage(appUrl, { prospects: Number(t.n), nosite: Number(t.nosite ?? 0) }));
+    }
+    // Maquette partagée avec le prospect : accessible sans compte, jamais indexée.
+    if (a === 'p' && b && parts.length === 2) {
+      const r = publicMockup(db, b);
+      if (r.state !== 'ok' || !r.row) {
+        res.writeHead(r.state === 'missing' ? 404 : 410, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+        return void res.end(unavailablePage(r.state === 'ok' ? 'missing' : r.state));
+      }
+      const owner = db.prepare('SELECT * FROM users WHERE id = ?').get(r.row.user_id) as unknown as UserRow;
+      // Les ouvertures par le créateur lui-même ne comptent pas comme des visites du prospect.
+      if (userBySession(db, cookies(req).sid)?.id !== owner.id) countView(db, r.row.id);
+      res.writeHead(200, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+      return void res.end(renderMockup(parseData(r.row), creatorOf(owner)));
     }
     if (a === 'tarifs' && parts.length === 1) return html(res, 200, seo.pricingPage(appUrl));
     if (a === 'mentions-legales' && parts.length === 1) return html(res, 200, seo.legalNoticePage(appUrl));

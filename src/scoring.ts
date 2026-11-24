@@ -95,7 +95,14 @@ export interface Pitch {
   sms: string;
 }
 
-export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): Pitch {
+export interface PitchExtras {
+  /** Lien de la maquette préparée pour ce prospect. */
+  mockupUrl?: string | null;
+  /** Prix proposé, tel que saisi par l'utilisateur (ex. « 990 € HT »). */
+  price?: string | null;
+}
+
+export function buildPitch(p: ProspectLike, sender: Sender, now = new Date(), extras: PitchExtras = {}): Pitch {
   const trade = tradeBySlug(p.trade);
   const benefit = trade?.benefit ?? 'être trouvé par de nouveaux clients sur Google';
   const where = p.city ? ` à ${titleCase(p.city)}` : '';
@@ -135,6 +142,20 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
       hook = `J’ai fait un rapide audit gratuit de votre site (${p.website}). Il vous fait perdre des clients à cause de quelques points précis :\n${top.join('\n')}`;
   }
 
+  const price = extras.price?.trim();
+  const offer = extras.mockupUrl
+    ? [
+        `J’ai préparé une proposition de site adaptée à votre activité. Vous pouvez la découvrir ici : ${extras.mockupUrl}`,
+        '',
+        ...(price ? [`Je vous propose de la finaliser pour ${price}.`, ''] : []),
+        'Si cette proposition vous intéresse, je serais ravi d’en échanger avec vous. Seriez-vous disponible cette semaine ?',
+      ]
+    : [
+        ...(price ? [`Je vous propose un site vitrine complet pour ${price}.`, ''] : []),
+        'Je peux vous montrer en 15 minutes, sans engagement, à quoi ressemblerait le vôtre. Seriez-vous disponible cette semaine ?',
+      ];
+  if (extras.mockupUrl) subject = `${p.name} : une proposition de site pour votre activité`;
+
   const email = [
     'Bonjour,',
     '',
@@ -142,7 +163,7 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
     '',
     `Je crée des sites pour les ${trade?.plural ?? 'professionnels'}${where} : un site rapide, lisible sur téléphone et bien placé sur Google, pour ${benefit}.`,
     '',
-    'Je peux vous montrer en 15 minutes, sans engagement, à quoi ressemblerait le vôtre. Seriez-vous disponible cette semaine ?',
+    ...offer,
     '',
     'Bien cordialement,',
     sig,
@@ -167,7 +188,7 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
 
   const sms = `Bonjour, ${who}${sender.agency_name && sender.full_name ? ` (${sender.agency_name})` : ''}. ${
     p.site_status === 'weak' || p.site_status === 'down' ? `J’ai repéré des problèmes sur le site de ${p.name}` : `Sauf erreur, ${p.name} n’a pas encore de site internet`
-  } : je vous propose une maquette gratuite. Intéressé(e) ? STOP pour ne plus être contacté.`;
+  } : ${extras.mockupUrl ? `j’ai préparé une proposition de site, à voir ici : ${extras.mockupUrl}` : 'je vous propose une maquette gratuite'}. Intéressé(e) ? STOP pour ne plus être contacté.`;
 
   return { subject, email, call, sms };
 }

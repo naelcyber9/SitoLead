@@ -549,6 +549,7 @@ export function robotsTxt(appUrl: string): string {
 Allow: /
 Disallow: /api/
 Disallow: /app
+Disallow: /p/
 
 Sitemap: ${appUrl}/sitemap.xml
 `;

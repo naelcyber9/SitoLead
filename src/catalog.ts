@@ -22,6 +22,8 @@ export const TRADES: Trade[] = [
   { slug: 'institut-beaute', label: 'Institut de beauté', plural: 'instituts de beauté', osm: ['shop', 'beauty'], naf: '96.02B', benefit: 'remplir l’agenda avec la réservation en ligne' },
   { slug: 'boucherie', label: 'Boucherie', plural: 'boucheries', osm: ['shop', 'butcher'], naf: '47.22Z', benefit: 'prendre les commandes de fêtes et de barbecue' },
   { slug: 'menuisier', label: 'Menuisier', plural: 'menuisiers', osm: ['craft', 'carpenter'], naf: '43.32A', benefit: 'montrer ses réalisations et recevoir des demandes de devis' },
+  { slug: 'climaticien', label: 'Climatisation', plural: 'climaticiens', osm: ['craft', 'hvac'], naf: '43.22B', benefit: 'recevoir les demandes d’installation et d’entretien de climatisation' },
+  { slug: 'couvreur', label: 'Couvreur', plural: 'couvreurs', osm: ['craft', 'roofer'], naf: '43.91B', benefit: 'rassurer avec des photos de chantiers et recevoir des demandes de devis toiture' },
   { slug: 'peintre', label: 'Peintre en bâtiment', plural: 'peintres en bâtiment', osm: ['craft', 'painter'], naf: '43.34Z', benefit: 'présenter ses chantiers avant/après et décrocher des devis' },
   { slug: 'macon', label: 'Maçon', plural: 'maçons', osm: ['craft', 'builder'], naf: '43.99C', benefit: 'rassurer les particuliers avec des références et des avis' },
   { slug: 'paysagiste', label: 'Paysagiste', plural: 'paysagistes', osm: ['craft', 'gardener'], naf: '81.30Z', benefit: 'présenter ses jardins et recevoir des demandes d’entretien' },

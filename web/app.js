@@ -18,7 +18,7 @@
     gagne: 'Gagné',
     perdu: 'Perdu',
   };
-  const VIEWS = { search: 'recherche', leads: 'prospects', billing: 'abonnement', profile: 'profil' };
+  const VIEWS = { search: 'recherche', leads: 'prospects', mockups: 'maquettes', billing: 'abonnement', profile: 'profil' };
   const HASH_TO_VIEW = Object.fromEntries(Object.entries(VIEWS).map(([k, v]) => [v, k]));
 
   const state = {
@@ -133,6 +133,7 @@
     $$('#app-nav button').forEach((b) => (b.dataset.view === view ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
     if (push && location.hash !== `#${VIEWS[view]}`) history.replaceState(null, '', `#${VIEWS[view]}`);
     if (view === 'leads') loadLeads();
+    if (view === 'mockups') loadMockups();
     if (view === 'billing') renderBilling();
     if (view === 'profile') renderProfile();
     window.scrollTo(0, 0);
@@ -599,19 +600,26 @@
     $('#lead-body').innerHTML = '<div class="loading"><span class="spinner" aria-hidden="true"></span></div>';
     if (!dlg.open) dlg.showModal();
     try {
-      const [{ lead }, { pitch, profileComplete }] = await Promise.all([
+      const [{ lead }, { items: mockups }] = await Promise.all([
         api(`/api/leads/${encodeURIComponent(id)}`),
-        api(`/api/leads/${encodeURIComponent(id)}/pitch`),
+        api(`/api/mockups?prospect=${encodeURIComponent(id)}`),
       ]);
+      // Le message intègre le lien de la maquette active la plus récente et le prix saisi.
+      const mockup = mockups.find((m) => m.active) ?? null;
+      const price = store.get(`price.${id}`) ?? '';
+      const qs = new URLSearchParams();
+      if (mockup) qs.set('mockup', mockup.id);
+      if (price) qs.set('price', price);
+      const { pitch, profileComplete } = await api(`/api/leads/${encodeURIComponent(id)}/pitch?${qs}`);
       currentLead = lead;
-      renderLead(lead, pitch, profileComplete);
+      renderLead(lead, pitch, profileComplete, mockups, price);
     } catch (e) {
       dlg.close();
       handleError(e);
     }
   }
 
-  function renderLead(p, pitch, profileComplete) {
+  function renderLead(p, pitch, profileComplete, mockups = [], price = '') {
     $('#lead-title').textContent = p.name;
     $('#lead-sub').textContent = [p.tradeLabel, p.city, `score ${p.opportunity}/100`].filter(Boolean).join(' · ');
     const facts = [
@@ -645,7 +653,24 @@
     const map = p.lat && p.lon ? ` · <a href="https://www.openstreetmap.org/?mlat=${p.lat}&amp;mlon=${p.lon}#map=18/${p.lat}/${p.lon}" target="_blank" rel="noopener">Voir sur la carte</a>` : '';
     const issues = p.issues.filter((i) => i.weight > 0);
     const statuses = state.config.leadStatuses.map((s) => `<option value="${s}"${p.lead.status === s ? ' selected' : ''}>${h(STATUS_LABELS[s] ?? s)}</option>`).join('');
-    const mailto = p.email ? `mailto:${encodeURIComponent(p.email)}?subject=${encodeURIComponent(pitch.subject)}&body=${encodeURIComponent(pitch.email)}` : '';
+    const active = mockups.find((m) => m.active);
+    const mq = state.user?.mockupQuota;
+    const mockupBlock = `
+<h3 class="section-title">Maquette de site</h3>
+${
+  mockups.length
+    ? `<ul class="mockup-mini">${mockups
+        .map(
+          (m) => `<li><span class="tag ${m.active ? 'tag-ok' : ''}">${m.active ? 'Lien actif' : m.revoked ? 'Révoquée' : 'Expirée'}</span>
+  ${m.active ? `<a href="${h(m.url)}" target="_blank" rel="noopener">${h(m.url.replace(/^https?:\/\//, ''))}</a>` : ''}
+  <span class="small muted">${fmt(m.views)} visite${m.views > 1 ? 's' : ''}</span>
+  <button type="button" class="btn btn-sm btn-ghost" data-edit-mockup="${h(m.id)}">Modifier</button></li>`,
+        )
+        .join('')}</ul>`
+    : '<p class="small muted">Préparez une maquette personnalisée de son futur site et envoyez-lui le lien : le message ci-dessous l’intègre automatiquement.</p>'
+}
+<button type="button" class="btn btn-sm" id="new-mockup">${mockups.length ? 'Générer une autre maquette' : 'Générer une maquette'}</button>
+${mq ? `<span class="small muted"> ${mq.remaining} maquette${mq.remaining > 1 ? 's' : ''} restante${mq.remaining > 1 ? 's' : ''}</span>` : ''}`;
 
     $('#lead-body').innerHTML = `
 ${profileComplete ? '' : '<p class="notice warn">Complétez votre <button type="button" class="btn-link" data-goto="profile">profil</button> pour signer vos messages avec votre nom et votre téléphone.</p>'}
@@ -654,17 +679,26 @@ ${profileComplete ? '' : '<p class="notice warn">Complétez votre <button type="
 <details class="score-details"><summary>Pourquoi ce score de ${p.opportunity}/100 ?</summary><ul class="factors">${factors}</ul></details>
 ${siteCheck}
 ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients</h3><ul class="issues">${issues.map((i) => `<li>${h(i.label)}</li>`).join('')}</ul>` : ''}
+${mockupBlock}
 <h3 class="section-title">Message de prospection</h3>
+<form id="price-form" class="row price-row" novalidate>
+  <label class="small">Prix proposé (facultatif)
+    <input name="price" maxlength="60" placeholder="Ex. 990 € HT" value="${h(price)}">
+  </label>
+  <button type="submit" class="btn btn-sm btn-ghost">Mettre à jour le message</button>
+</form>
+${active ? '<p class="small muted">Le lien de la maquette est inclus dans le message.</p>' : ''}
 <div class="tabs" role="tablist" aria-label="Type de message">
   <button type="button" role="tab" aria-selected="true" data-pitch="email">Email</button>
   <button type="button" role="tab" aria-selected="false" data-pitch="call">Appel</button>
   <button type="button" role="tab" aria-selected="false" data-pitch="sms">SMS</button>
 </div>
-<p class="small muted" id="pitch-subject">Objet : ${h(pitch.subject)}</p>
-<pre class="pitch-text" id="pitch-text" tabindex="0">${h(pitch.email)}</pre>
+<label class="field" id="pitch-subject-field"><span>Objet</span><input id="pitch-subject" maxlength="200" value="${h(pitch.subject)}"></label>
+<label class="field"><span class="sr-only">Message</span><textarea class="pitch-text" id="pitch-text" rows="14">${h(pitch.email)}</textarea></label>
+<p class="small muted">Relisez et adaptez le message avant de l’envoyer. Il contient une mention de désinscription : respectez les refus.</p>
 <div class="row">
   <button type="button" class="btn btn-sm btn-dark" id="copy-pitch">Copier</button>
-  ${mailto ? `<a class="btn btn-sm btn-ghost" href="${h(mailto)}">Ouvrir dans ma messagerie</a>` : ''}
+  ${p.email ? '<button type="button" class="btn btn-sm btn-ghost" id="mail-pitch">Ouvrir dans ma messagerie</button>' : ''}
 </div>
 <h3 class="section-title">Suivi</h3>
 <form id="lead-form" novalidate>
@@ -676,18 +710,21 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
   <button class="btn btn-sm" type="submit">Enregistrer le suivi</button>
 </form>`;
 
+    // Textes modifiables : les modifications de chaque onglet sont conservées tant que la fiche est ouverte.
     const texts = { email: pitch.email, call: pitch.call, sms: pitch.sms };
     let current = 'email';
+    const area = $('#pitch-text');
+    area.addEventListener('input', () => (texts[current] = area.value));
     $$('[data-pitch]', $('#lead-body')).forEach((b) =>
       b.addEventListener('click', () => {
         current = b.dataset.pitch;
         $$('[data-pitch]', $('#lead-body')).forEach((x) => x.setAttribute('aria-selected', String(x === b)));
-        $('#pitch-text').textContent = texts[current];
-        $('#pitch-subject').hidden = current !== 'email';
+        area.value = texts[current];
+        $('#pitch-subject-field').hidden = current !== 'email';
       }),
     );
     $('#copy-pitch').addEventListener('click', async () => {
-      const text = current === 'email' ? `Objet : ${pitch.subject}\n\n${texts.email}` : texts[current];
+      const text = current === 'email' ? `Objet : ${$('#pitch-subject').value}\n\n${texts.email}` : texts[current];
       try {
         await navigator.clipboard.writeText(text);
         toast('Message copié');
@@ -695,6 +732,36 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
         toast('Copie impossible : sélectionnez le texte manuellement');
       }
     });
+    $('#mail-pitch')?.addEventListener('click', () => {
+      // Le logiciel de messagerie de l'utilisateur s'ouvre avec le message relu : rien n'est envoyé par SitoLead.
+      location.href = `mailto:${encodeURIComponent(p.email)}?subject=${encodeURIComponent($('#pitch-subject').value)}&body=${encodeURIComponent(texts.email)}`;
+    });
+    $('#price-form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      store.set(`price.${p.id}`, String(new FormData(ev.target).get('price') ?? '').trim());
+      openLead(p.id);
+    });
+    $('#new-mockup').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const { mockup, mockupQuota } = await api('/api/mockups', { method: 'POST', body: { prospect_id: p.id } });
+        setUser({ ...state.user, mockupQuota });
+        $('#lead-dialog').close();
+        openEditor(mockup);
+      } catch (err) {
+        btn.disabled = false;
+        if (err.status === 402) $('#lead-dialog').close();
+        handleError(err);
+      }
+    });
+    $$('[data-edit-mockup]', $('#lead-body')).forEach((b) =>
+      b.addEventListener('click', async () => {
+        const m = mockups.find((x) => x.id === b.dataset.editMockup);
+        $('#lead-dialog').close();
+        openEditor(m);
+      }),
+    );
     $('[data-goto]', $('#lead-body'))?.addEventListener('click', () => {
       $('#lead-dialog').close();
       go('profile');
@@ -736,6 +803,165 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
       } catch (e) {
         handleError(e);
       }
+    });
+  }
+
+  // --- Maquettes ------------------------------------------------------------------------
+
+  let editing = null;
+
+  const mockupState = (m) => (m.active ? 'Lien actif' : m.revoked ? 'Lien révoqué' : 'Lien expiré');
+
+  async function loadMockups() {
+    $('#mockups').innerHTML = '<div class="loading"><span class="spinner" aria-hidden="true"></span></div>';
+    try {
+      const data = await api('/api/mockups');
+      setUser({ ...state.user, mockupQuota: data.mockupQuota });
+      const q = data.mockupQuota;
+      $('#mockup-quota').textContent = `${q.used} maquette${q.used > 1 ? 's' : ''} créée${q.used > 1 ? 's' : ''} sur ${q.limit}${state.user.quota?.resetsAt ? ' ce mois-ci' : ''}`;
+      state.mockups = data.items;
+      if (!data.items.length) {
+        $('#mockups').innerHTML = `<div class="empty"><p><strong>Aucune maquette pour l’instant.</strong></p><p>Ouvrez la fiche d’une entreprise débloquée et cliquez sur « Générer une maquette ».</p><p><button type="button" class="btn btn-sm" data-goto-view="leads">Voir mes prospects</button></p></div>`;
+        return;
+      }
+      $('#mockups').innerHTML = `<div class="results">${data.items
+        .map(
+          (m) => `<article class="card">
+  <div class="swatch" aria-hidden="true"><span></span></div>
+  <div>
+    <h3>${h(m.data.name)}</h3>
+    <p class="meta">${h(m.data.tagline)}</p>
+    <p><span class="tag ${m.active ? 'tag-ok' : 'tag-warn'}">${mockupState(m)}</span><span class="tag">${fmt(m.views)} visite${m.views > 1 ? 's' : ''}</span>
+    <span class="small muted">${m.active ? `Expire le ${h(fmtDate(m.expires_at))}` : ''}${m.last_viewed_at ? ` · dernière visite le ${h(fmtDate(m.last_viewed_at))}` : ''}</span></p>
+  </div>
+  <div class="actions"><button type="button" class="btn btn-sm" data-edit="${h(m.id)}">Modifier</button>${
+    m.active ? `<a class="btn btn-sm btn-ghost" href="${h(m.url)}" target="_blank" rel="noopener">Ouvrir</a>` : ''
+  }</div>
+</article>`,
+        )
+        .join('')}</div>`;
+      $$('#mockups .swatch span').forEach((el, i) => {
+        // Couleurs de la maquette (valeurs validées côté serveur au format #rrggbb).
+        el.style.background = `linear-gradient(135deg, ${data.items[i].data.primary} 60%, ${data.items[i].data.accent} 60%)`;
+      });
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  function openEditor(m) {
+    editing = m;
+    const dlg = $('#mockup-dialog');
+    const f = $('#mockup-form');
+    const d = m.data;
+    f.sector.innerHTML = state.config.sectors.map((s) => `<option value="${h(s.id)}">${h(s.label)}</option>`).join('');
+    f.art.innerHTML = state.config.artKeys.map((k) => `<option value="${h(k)}">${h(ART_LABELS[k] ?? k)}</option>`).join('');
+    for (const k of ['sector', 'name', 'tagline', 'about', 'area', 'phone', 'email', 'address', 'hours', 'cta', 'primary', 'accent', 'art']) f[k].value = d[k] ?? '';
+    f.services.value = (d.services ?? []).join('\n');
+    for (const k of ['about', 'services', 'area', 'hours', 'contact']) f[`s_${k}`].checked = Boolean(d.sections?.[k]);
+    f.expires.value = '';
+    $('.form-error', f).textContent = '';
+    renderEditorMeta();
+    setDevice('desktop');
+    reloadFrame();
+    if (!dlg.open) dlg.showModal();
+  }
+
+  const ART_LABELS = { water: 'Goutte d’eau', bolt: 'Éclair', air: 'Air', bricks: 'Briques', roof: 'Toit', leaf: 'Feuille', car: 'Voiture', plate: 'Assiette', scissors: 'Ciseaux', shop: 'Boutique', spark: 'Étoile' };
+
+  function renderEditorMeta() {
+    const m = editing;
+    $('#mockup-title').textContent = m.data.name;
+    $('#mockup-sub').textContent = `${mockupState(m)} · ${m.active ? `expire le ${fmtDate(m.expires_at)} · ` : ''}${fmt(m.views)} visite${m.views > 1 ? 's' : ''}`;
+    $('#mockup-open').href = m.url;
+    $('#mockup-open').hidden = !m.active;
+    $('#mockup-copy').disabled = !m.active;
+    $('#mockup-revoke').textContent = m.revoked ? 'Réactiver le lien' : 'Révoquer le lien';
+  }
+
+  function reloadFrame() {
+    $('#mockup-frame').src = `/api/mockups/${encodeURIComponent(editing.id)}/apercu?t=${Date.now()}`;
+  }
+
+  function setDevice(device) {
+    $$('[data-device]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.device === device)));
+    $('.frame-wrap').classList.toggle('is-mobile', device === 'mobile');
+  }
+
+  function editorData() {
+    const f = $('#mockup-form');
+    const v = (k) => f[k].value;
+    return {
+      sector: v('sector'), name: v('name'), tagline: v('tagline'), about: v('about'),
+      services: v('services').split('\n').map((s) => s.trim()).filter(Boolean),
+      area: v('area'), phone: v('phone'), email: v('email'), address: v('address'), hours: v('hours'), cta: v('cta'),
+      primary: v('primary'), accent: v('accent'), art: v('art'),
+      sections: Object.fromEntries(['about', 'services', 'area', 'hours', 'contact'].map((k) => [k, f[`s_${k}`].checked])),
+    };
+  }
+
+  function bindEditor() {
+    const f = $('#mockup-form');
+    f.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const body = { data: editorData() };
+      if (f.expires.value) body.expiresInDays = Number(f.expires.value);
+      try {
+        const { mockup } = await api(`/api/mockups/${encodeURIComponent(editing.id)}`, { method: 'PATCH', body });
+        editing = mockup;
+        f.expires.value = '';
+        renderEditorMeta();
+        reloadFrame();
+        toast('Maquette enregistrée');
+        if (state.view === 'mockups') loadMockups();
+      } catch (e) {
+        $('.form-error', f).textContent = e.message;
+      }
+    });
+    // Changer de secteur propose ses couleurs et son illustration (le texte saisi est conservé).
+    f.sector.addEventListener('change', () => {
+      const s = state.config.sectors.find((x) => x.id === f.sector.value);
+      if (!s) return;
+      f.primary.value = s.primary;
+      f.accent.value = s.accent;
+      f.art.value = s.art;
+    });
+    $$('[data-device]').forEach((b) => b.addEventListener('click', () => setDevice(b.dataset.device)));
+    $('#mockup-copy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(editing.url);
+        toast('Lien copié');
+      } catch {
+        toast(editing.url);
+      }
+    });
+    $('#mockup-revoke').addEventListener('click', async () => {
+      try {
+        const { mockup } = await api(`/api/mockups/${encodeURIComponent(editing.id)}/revoked`, { method: 'PUT', body: { revoked: !editing.revoked } });
+        editing = mockup;
+        renderEditorMeta();
+        toast(mockup.revoked ? 'Lien révoqué : la maquette n’est plus accessible' : 'Lien réactivé');
+        if (state.view === 'mockups') loadMockups();
+      } catch (e) {
+        handleError(e);
+      }
+    });
+    $('#mockup-delete').addEventListener('click', async () => {
+      if (!confirm('Supprimer définitivement cette maquette ? Son lien cessera de fonctionner.')) return;
+      try {
+        await api(`/api/mockups/${encodeURIComponent(editing.id)}`, { method: 'DELETE' });
+        $('#mockup-dialog').close();
+        toast('Maquette supprimée');
+        if (state.view === 'mockups') loadMockups();
+      } catch (e) {
+        handleError(e);
+      }
+    });
+    $('#mockups').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-edit]');
+      if (b) openEditor(state.mockups.find((m) => m.id === b.dataset.edit));
+      const g = e.target.closest('[data-goto-view]');
+      if (g) go(g.dataset.gotoView);
     });
   }
 
@@ -975,7 +1201,8 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
     $$('#app-nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.view)));
     $$('dialog').forEach((d) => {
       d.addEventListener('click', (e) => {
-        if (e.target === d || e.target.closest('[data-close]')) d.close();
+        // L'éditeur ne se ferme pas d'un clic à côté : on éviterait de perdre une saisie.
+        if ((e.target === d && d.id !== 'mockup-dialog') || e.target.closest('[data-close]')) d.close();
       });
     });
     $('#plans').addEventListener('click', onPlanClick);
@@ -995,6 +1222,7 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
       bindAuth();
       bindSearch();
       bindLeads();
+      bindEditor();
       bindProfile();
       bindGlobal();
       const hash = location.hash.slice(1);

@@ -21,6 +21,7 @@
     <nav class="app-nav" id="app-nav" aria-label="Navigation de l’application" hidden>
       <button type="button" data-view="search">Trouver des clients</button>
       <button type="button" data-view="leads">Mes prospects</button>
+      <button type="button" data-view="mockups">Maquettes</button>
       <button type="button" data-view="billing">Abonnement</button>
       <button type="button" data-view="profile">Profil</button>
     </nav>
@@ -150,6 +151,16 @@
     <div id="leads"></div>
   </section>
 
+  <!-- Maquettes -->
+  <section class="wrap view" id="view-mockups" hidden>
+    <div class="pipeline-head">
+      <h1>Maquettes</h1>
+      <p class="small muted" id="mockup-quota"></p>
+    </div>
+    <p class="muted">Créez une maquette depuis la fiche d’une entreprise débloquée (bouton « Générer une maquette »), puis envoyez son lien dans votre message de prospection.</p>
+    <div id="mockups"></div>
+  </section>
+
   <!-- Abonnement -->
   <section class="wrap view" id="view-billing" hidden>
     <div id="billing-notice"></div>
@@ -194,6 +205,60 @@
     <button type="button" class="close" data-close aria-label="Fermer">×</button>
   </div>
   <div class="dialog-body" id="lead-body"></div>
+</dialog>
+
+<!-- Éditeur de maquette -->
+<dialog id="mockup-dialog" class="dialog-wide" aria-labelledby="mockup-title">
+  <div class="dialog-head">
+    <div><h2 id="mockup-title">Maquette</h2><p class="muted small" id="mockup-sub"></p></div>
+    <button type="button" class="close" data-close aria-label="Fermer">×</button>
+  </div>
+  <div class="editor">
+    <form id="mockup-form" class="editor-form" novalidate>
+      <p class="notice warn small">Vérifiez chaque information avec l’entreprise : n’ajoutez ni avis, ni certification, ni tarif, ni ancienneté qui ne soient pas confirmés.</p>
+      <label class="field"><span>Secteur (modèle)</span><select name="sector"></select></label>
+      <label class="field"><span>Nom de l’entreprise</span><input name="name" maxlength="80" required></label>
+      <label class="field"><span>Accroche</span><input name="tagline" maxlength="120"></label>
+      <label class="field"><span>Présentation</span><textarea name="about" maxlength="1200" rows="4"></textarea></label>
+      <label class="field"><span>Prestations (une par ligne, à valider avec l’entreprise)</span><textarea name="services" rows="4"></textarea></label>
+      <label class="field"><span>Zone d’intervention</span><input name="area" maxlength="300"></label>
+      <div class="grid-2">
+        <label class="field"><span>Téléphone</span><input name="phone" maxlength="30"></label>
+        <label class="field"><span>Email</span><input name="email" type="email" maxlength="120"></label>
+      </div>
+      <label class="field"><span>Adresse</span><input name="address" maxlength="200"></label>
+      <label class="field"><span>Horaires (seulement s’ils sont connus)</span><textarea name="hours" maxlength="400" rows="3"></textarea></label>
+      <label class="field"><span>Bouton d’appel à l’action</span><input name="cta" maxlength="40"></label>
+      <div class="grid-2">
+        <label class="field"><span>Couleur principale</span><input name="primary" type="color"></label>
+        <label class="field"><span>Couleur d’accent</span><input name="accent" type="color"></label>
+      </div>
+      <label class="field"><span>Illustration</span><select name="art"></select></label>
+      <fieldset class="field sections"><legend>Sections affichées</legend>
+        <label class="check"><input type="checkbox" name="s_about"><span>Présentation</span></label>
+        <label class="check"><input type="checkbox" name="s_services"><span>Prestations</span></label>
+        <label class="check"><input type="checkbox" name="s_area"><span>Zone d’intervention</span></label>
+        <label class="check"><input type="checkbox" name="s_hours"><span>Horaires</span></label>
+        <label class="check"><input type="checkbox" name="s_contact"><span>Contact</span></label>
+      </fieldset>
+      <label class="field"><span>Durée du lien</span><select name="expires"><option value="">Inchangée</option><option value="7">7 jours</option><option value="30">30 jours</option><option value="90">90 jours</option></select></label>
+      <p class="form-error" role="alert"></p>
+      <div class="row editor-actions">
+        <button class="btn" type="submit">Enregistrer</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="mockup-copy">Copier le lien</button>
+        <a class="btn btn-ghost btn-sm" id="mockup-open" target="_blank" rel="noopener">Ouvrir</a>
+        <button class="btn btn-ghost btn-sm" type="button" id="mockup-revoke"></button>
+        <button class="btn btn-danger btn-sm" type="button" id="mockup-delete">Supprimer</button>
+      </div>
+    </form>
+    <div class="editor-preview">
+      <div class="row preview-toggle" role="group" aria-label="Format d’aperçu">
+        <button type="button" class="chip" data-device="desktop" aria-pressed="true">Ordinateur</button>
+        <button type="button" class="chip" data-device="mobile" aria-pressed="false">Mobile</button>
+      </div>
+      <div class="frame-wrap"><iframe id="mockup-frame" title="Aperçu de la maquette"></iframe></div>
+    </div>
+  </div>
 </dialog>
 
 <!-- Passage à l'offre payante -->
