@@ -2,7 +2,7 @@
 // accueil, tarifs, pages par ville, par métier et ville × métier, pages légales,
 // sitemap et robots. Aucune coordonnée de prospect n'est publiée : seulement des agrégats.
 
-import { FREE_UNLOCKS, PLANS } from './billing.ts';
+import { FREE_UNLOCKS, GRACE_DAYS, PACKS, PLANS } from './billing.ts';
 import { CITIES, TRADES, type City, type Trade } from './catalog.ts';
 
 export const esc = (s: unknown): string =>
@@ -111,6 +111,7 @@ function pricingCards(): string {
   ${p.id === 'pro' ? '<p class="plan-flag">Le plus choisi</p>' : ''}
   <h3>${esc(p.name)}</h3>
   <p class="price"><strong>${p.priceEur} €</strong>${p.monthly ? '<span> HT / mois</span>' : '<span> pour toujours</span>'}</p>
+  ${p.monthly ? `<p class="small muted">ou ${p.yearlyEur} € HT / an (2 mois offerts)</p>` : ''}
   <ul class="checks">${p.features.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
   <a class="btn${p.id === 'pro' ? '' : ' btn-ghost'}" href="/app#inscription">${p.id === 'free' ? 'Commencer gratuitement' : `Choisir ${esc(p.name)}`}</a>
   <p class="small muted">${p.monthly ? 'Sans engagement, résiliable en 1 clic.' : 'Sans carte bancaire.'}</p>
@@ -306,10 +307,13 @@ ${crumbs([['Accueil', '/'], ['Tarifs', '/tarifs']])}
     <thead><tr><th scope="col">Inclus</th>${plans.map((p) => `<th scope="col">${esc(p.name)}</th>`).join('')}</tr></thead>
     <tbody>
       <tr><th scope="row">Entreprises débloquées</th>${plans.map((p) => `<td>${fmt(p.unlocks)}${p.monthly ? ' / mois' : ' au total'}</td>`).join('')}</tr>
-      <tr><th scope="row">Recherche par ville et métier</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
-      <tr><th scope="row">Audit de site</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
+      <tr><th scope="row">Maquettes de site</th>${plans.map((p) => `<td>${fmt(p.mockups)}${p.monthly ? ' / mois' : ' au total'}</td>`).join('')}</tr>
+      <tr><th scope="row">Rédactions de textes par IA</th>${plans.map((p) => `<td>${fmt(p.aiPerMonth)} / mois</td>`).join('')}</tr>
+      <tr><th scope="row">Recherches par jour</th>${plans.map((p) => `<td>${fmt(p.searchesPerDay)}</td>`).join('')}</tr>
+      <tr><th scope="row">Recherche par ville, département, région, rayon</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
+      <tr><th scope="row">Audit de site et score expliqué</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
       <tr><th scope="row">Email, appel, SMS personnalisés</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
-      <tr><th scope="row">Pipeline et relances</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
+      <tr><th scope="row">Suivi commercial, rappels, statistiques</th>${plans.map(() => '<td>Oui</td>').join('')}</tr>
       <tr><th scope="row">Export CSV</th>${plans.map((p) => `<td>${p.csv ? 'Oui' : 'Non'}</td>`).join('')}</tr>
       <tr><th scope="row">Support</th>${plans.map((p) => `<td>${p.id === 'agence' ? 'Prioritaire' : 'Email'}</td>`).join('')}</tr>
     </tbody>
@@ -503,7 +507,13 @@ export function termsPage(appUrl: string): string {
 <h2>Service</h2>
 <p>${BRAND} fournit des listes d’entreprises susceptibles d’avoir besoin d’un site internet, des audits automatiques de sites et des modèles de messages de prospection.</p>
 <h2>Offres et paiement</h2>
-<p>L’offre Découverte donne accès gratuitement à ${FREE_UNLOCKS} entreprises. Les offres Pro (${PLANS.pro.priceEur} € HT / mois, ${PLANS.pro.unlocks} entreprises par mois) et Agence (${PLANS.agence.priceEur} € HT / mois, ${fmt(PLANS.agence.unlocks)} entreprises par mois) sont des abonnements mensuels sans engagement, payés d’avance par carte via Stripe. Les quotas non utilisés ne sont pas reportés.</p>
+<p>L’offre Découverte donne accès gratuitement à ${FREE_UNLOCKS} entreprises et ${PLANS.free.mockups} maquette. Les offres ${[PLANS.starter, PLANS.pro, PLANS.agence]
+    .map((p) => `${p.name} (${p.priceEur} € HT / mois ou ${p.yearlyEur} € HT / an, ${fmt(p.unlocks)} entreprises et ${p.mockups} maquettes par mois)`)
+    .join(', ')} sont des abonnements sans engagement, payés d’avance par carte via Stripe. Les quotas mensuels non utilisés ne sont pas reportés. Les packs de crédits (${Object.values(PACKS)
+    .map((k) => `${k.unlocks} entreprises pour ${k.priceEur} € HT`)
+    .join(', ')}) sont des achats uniques, sans limite de durée, utilisés une fois le quota de l’offre épuisé.</p>
+<h2>Paiement échoué</h2>
+<p>En cas d’échec du paiement d’un abonnement, l’accès est maintenu ${GRACE_DAYS} jours pour permettre la mise à jour du moyen de paiement. Passé ce délai, le compte repasse à l’offre gratuite ; les prospects, maquettes et données de suivi sont conservés.</p>
 <h2>Résiliation</h2>
 <p>Vous pouvez résilier à tout moment depuis votre espace. L’abonnement reste actif jusqu’à la fin de la période en cours. Les entreprises déjà débloquées restent accessibles.</p>
 <h2>Bon usage</h2>

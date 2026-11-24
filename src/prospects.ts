@@ -2,7 +2,7 @@
 // déblocage soumis au quota et pipeline commercial.
 
 import { auditWebsite, classifyWebsite, type AuditIssue, type SiteStatus } from './audit.ts';
-import { quotaFor, type UserRow } from './billing.ts';
+import { nextUnlockUsesCredit, quotaFor, type UserRow } from './billing.ts';
 import { CITIES, TRADES, tradeBySlug } from './catalog.ts';
 import { nowIso, tx, type DB } from './db.ts';
 import { NO_SITE_STATUSES, opportunityDetails, opportunityScore, statusLabel, type ScoreFactor } from './scoring.ts';
@@ -583,9 +583,11 @@ export function unlockProspect(db: DB, user: UserRow, prospectId: string): Unloc
     if (!existing) {
       if (quotaFor(db, user).remaining <= 0) return { ok: false, reason: 'quota' } as const;
       const now = nowIso();
-      db.prepare(`INSERT INTO leads (user_id, prospect_id, unlocked_at, updated_at, status, status_changed_at) VALUES (?, ?, ?, ?, 'debloque', ?)`).run(
-        user.id, prospectId, now, now, now,
-      );
+      // Quota de l'offre épuisé : le déblocage consomme un crédit acheté (pack).
+      const credit = nextUnlockUsesCredit(db, user) ? 1 : 0;
+      db.prepare(
+        `INSERT INTO leads (user_id, prospect_id, unlocked_at, updated_at, status, status_changed_at, credit_used) VALUES (?, ?, ?, ?, 'debloque', ?, ?)`,
+      ).run(user.id, prospectId, now, now, now, credit);
       logEvent(db, user.id, prospectId, 'unlock');
     }
     return { ok: true, prospect: getLead(db, user.id, prospectId)!, already: Boolean(existing) } as const;

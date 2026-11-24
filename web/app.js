@@ -1238,38 +1238,73 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       if (l && l.lead.status !== col.dataset.drop) moveLead(id, col.dataset.drop);
     });
     $('#csv-btn').addEventListener('click', () => {
-      if (!state.user.csv) return openUpgrade('L’export CSV est inclus dans les offres Pro et Agence.');
+      if (!state.user.csv) return openUpgrade('L’export CSV est inclus dans toutes les offres payantes.');
       location.href = '/api/leads.csv';
     });
   }
 
   // --- Abonnement ---------------------------------------------------------------------
 
+  // Rythme de facturation choisi dans les cartes d'offres (annuel = 2 mois offerts).
+  let billingInterval = 'month';
+
   function planCards(container, { compact = false } = {}) {
     const u = state.user;
     const plans = state.config.plans.filter((p) => !compact || p.id !== 'free');
-    container.innerHTML = plans
+    const toggle = `<div class="interval-toggle row" role="group" aria-label="Rythme de paiement">
+  <button type="button" class="chip" data-interval="month" aria-pressed="${billingInterval === 'month'}">Mensuel</button>
+  <button type="button" class="chip" data-interval="year" aria-pressed="${billingInterval === 'year'}">Annuel · 2 mois offerts</button>
+</div>`;
+    container.innerHTML = `${toggle}<div class="plans">${plans
       .map((p) => {
         const current = u.plan === p.id;
         let action;
         if (p.id === 'free') action = current ? '<p class="small muted">Votre offre actuelle</p>' : '';
         else if (current) action = '<button type="button" class="btn btn-ghost" data-portal>Gérer mon abonnement</button>';
         else action = `<button type="button" class="btn${p.id === 'pro' ? '' : ' btn-dark'}" data-plan="${p.id}">${u.plan === 'free' ? 'Choisir' : 'Passer à'} ${h(p.name)}</button>`;
+        const yearly = billingInterval === 'year' && p.monthly;
+        const price = p.monthly
+          ? yearly
+            ? `<strong>${p.yearlyEur} €</strong><span> HT / an</span><br><span class="small muted">soit ${(p.yearlyEur / 12).toFixed(2).replace('.', ',')} € / mois</span>`
+            : `<strong>${p.priceEur} €</strong><span> HT / mois</span>`
+          : `<strong>0 €</strong><span> pour toujours</span>`;
         return `<article class="plan${p.id === 'pro' && !current ? ' plan-featured' : ''}${current ? ' plan-current' : ''}">
   ${current ? '<p class="plan-flag">Votre offre</p>' : p.id === 'pro' ? '<p class="plan-flag">Le plus choisi</p>' : ''}
   <h3>${h(p.name)}</h3>
-  <p class="price"><strong>${p.priceEur} €</strong><span>${p.monthly ? ' HT / mois' : ' pour toujours'}</span></p>
+  <p class="price">${price}</p>
   <ul class="checks">${p.features.map((f) => `<li>${h(f)}</li>`).join('')}</ul>
   ${action}
 </article>`;
       })
-      .join('');
+      .join('')}</div>`;
+  }
+
+  function renderPacks() {
+    const u = state.user;
+    $('#packs').innerHTML = `<h2 class="section-title">Besoin de plus d’entreprises ce mois-ci ?</h2>
+<p class="small muted">Packs sans abonnement, utilisés une fois le quota de votre offre épuisé, valables sans limite de durée.${
+      u.quota?.credits ? ` Crédits disponibles : <strong>${fmt(u.quota.credits)}</strong>.` : ''
+    }</p>
+<div class="row packs-row">${state.config.packs
+      .map((p) => `<button type="button" class="btn btn-ghost" data-pack="${h(p.id)}">${h(p.name)} · ${p.priceEur} € HT</button>`)
+      .join('')}</div>`;
   }
 
   async function startCheckout(plan, btn) {
     btn.disabled = true;
     try {
-      const { url } = await api('/api/billing/checkout', { method: 'POST', body: { plan } });
+      const { url } = await api('/api/billing/checkout', { method: 'POST', body: { plan, interval: billingInterval } });
+      location.href = url;
+    } catch (e) {
+      btn.disabled = false;
+      handleError(e);
+    }
+  }
+
+  async function buyPack(pack, btn) {
+    btn.disabled = true;
+    try {
+      const { url } = await api('/api/billing/pack', { method: 'POST', body: { pack } });
       location.href = url;
     } catch (e) {
       btn.disabled = false;
@@ -1289,6 +1324,14 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
   }
 
   function onPlanClick(e) {
+    const interval = e.target.closest('[data-interval]');
+    if (interval) {
+      billingInterval = interval.dataset.interval;
+      planCards(e.currentTarget, { compact: e.currentTarget.id === 'upgrade-plans' });
+      return;
+    }
+    const pack = e.target.closest('[data-pack]');
+    if (pack) return buyPack(pack.dataset.pack, pack);
     const plan = e.target.closest('[data-plan]');
     if (plan) return startCheckout(plan.dataset.plan, plan);
     const portal = e.target.closest('[data-portal]');
@@ -1300,19 +1343,27 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     const q = u.quota;
     $('#plan-name').textContent = `Offre ${u.planName}`;
     const meta = [];
-    if (u.plan_status === 'past_due') meta.push('paiement en échec : mettez à jour votre carte');
-    if (u.period_end && u.plan !== 'free') meta.push(`renouvellement le ${fmtDate(u.period_end)}`);
+    if (u.period_end && u.plan !== 'free') meta.push(`${u.billing_interval === 'year' ? 'annuel, ' : ''}renouvellement le ${fmtDate(u.period_end)}`);
     $('#plan-meta').textContent = meta.length ? `· ${meta.join(' · ')}` : '';
     $('#quota-bar').style.width = `${Math.min(100, (q.used / Math.max(1, q.limit)) * 100)}%`;
     $('#quota-text').textContent =
-      q.plan === 'free'
+      (q.plan === 'free'
         ? `${q.used} entreprise${q.used > 1 ? 's' : ''} débloquée${q.used > 1 ? 's' : ''} sur ${q.limit} offertes.`
-        : `${fmt(q.used)} sur ${fmt(q.limit)} entreprises débloquées ce mois-ci. Remise à zéro le ${fmtDate(q.resetsAt)}.`;
+        : `${fmt(q.used)} sur ${fmt(q.limit)} entreprises débloquées ce mois-ci. Remise à zéro le ${fmtDate(q.resetsAt)}.`) +
+      (q.credits ? ` Plus ${fmt(q.credits)} crédit${q.credits > 1 ? 's' : ''} acheté${q.credits > 1 ? 's' : ''}.` : '') +
+      (u.mockupQuota ? ` Maquettes : ${u.mockupQuota.used} / ${u.mockupQuota.limit}.` : '') +
+      (u.aiQuota && state.config.ai ? ` Rédactions IA : ${u.aiQuota.used} / ${u.aiQuota.limit}.` : '');
     $('#portal-btn').hidden = !u.hasBilling;
-    if (!state.config.billing) {
-      $('#billing-notice').innerHTML = '<p class="notice warn">Le paiement en ligne n’est pas encore activé sur ce serveur.</p>';
+    const notices = [];
+    if (!state.config.billing) notices.push('<p class="notice warn">Le paiement en ligne n’est pas encore activé sur ce serveur.</p>');
+    if (u.graceEndsAt) {
+      notices.push(
+        `<p class="notice warn">Le dernier paiement de votre abonnement a échoué. Mettez à jour votre carte avant le ${h(fmtDate(u.graceEndsAt))} (bouton « Gérer mon abonnement ») : passé ce délai, votre compte repassera à l’offre gratuite. Vos prospects et maquettes sont conservés.</p>`,
+      );
     }
+    $('#billing-notice').innerHTML = notices.join('');
     planCards($('#plans'));
+    renderPacks();
   }
 
   function openUpgrade(message) {
@@ -1400,6 +1451,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     });
     $('#plans').addEventListener('click', onPlanClick);
     $('#upgrade-plans').addEventListener('click', onPlanClick);
+    $('#packs').addEventListener('click', onPlanClick);
     $('#portal-btn').addEventListener('click', (e) => openPortal(e.currentTarget));
     window.addEventListener('hashchange', () => {
       const h2 = location.hash.slice(1);

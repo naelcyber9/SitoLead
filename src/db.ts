@@ -127,6 +127,15 @@ CREATE TABLE IF NOT EXISTS mockup_events (
 );
 CREATE INDEX IF NOT EXISTS idx_mockup_events ON mockup_events (user_id, created_at);
 
+-- Crédits achetés (packs d'entreprises supplémentaires). source unique : un paiement = un ajout.
+CREATE TABLE IF NOT EXISTS credits (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount     INTEGER NOT NULL,
+  source     TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+
 -- Historique du suivi commercial (déblocage, statuts, maquettes, messages préparés…).
 CREATE TABLE IF NOT EXISTS lead_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +235,12 @@ const COLUMNS: Record<string, [string, string][]> = {
     // Suivi commercial : montant du contrat déclaré par l'utilisateur, date du dernier changement de statut.
     ['deal_amount', 'REAL'],
     ['status_changed_at', 'TEXT'],
+    // 1 si ce déblocage a été payé par un crédit acheté (pack) plutôt que par l'offre.
+    ['credit_used', 'INTEGER NOT NULL DEFAULT 0'],
+  ],
+  users: [
+    ['payment_failed_at', 'TEXT'],
+    ['billing_interval', 'TEXT'],
   ],
 };
 

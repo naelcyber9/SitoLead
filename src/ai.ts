@@ -20,14 +20,14 @@ const PRICE = { input: 4, output: 20 };
 export const aiConfigured = (): boolean => Boolean(process.env.ANTHROPIC_API_KEY?.trim());
 const dailyBudgetUsd = () => Number(process.env.AI_DAILY_BUDGET_USD ?? 2) || 0;
 
-/** Générations IA par mois selon l'offre (l'offre gratuite en a quelques-unes pour essayer). */
-export const AI_PER_MONTH: Record<string, number> = { free: 3, pro: 100, agence: 300 };
+
+
 
 export function aiQuota(db: DB, u: UserRow, now = new Date()): { limit: number; used: number; remaining: number } {
   const plan = effectivePlan(u);
   const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   const used = Number((db.prepare('SELECT COUNT(*) AS n FROM ai_usage WHERE user_id = ? AND created_at >= ?').get(u.id, since) as { n: number }).n);
-  const limit = AI_PER_MONTH[plan.id] ?? 0;
+  const limit = plan.aiPerMonth;
   return { limit, used, remaining: Math.max(0, limit - used) };
 }
 

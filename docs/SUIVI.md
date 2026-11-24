@@ -46,10 +46,31 @@ Tests : **39 tests, 39 réussis** · vérification TypeScript : **aucune erreur*
 
 Tests : **44 tests, 44 réussis** · TypeScript : **aucune erreur** · essai réel : génération, éditeur (ordinateur et mobile), page publique sans compte, aucune erreur console.
 
-## Phase 3 — Commercialisation ⬜
+### Compléments phase 2 ✅
 
-CRM complet (statuts étendus, Kanban, historique, rappels), statistiques réelles, grille d'offres configurable
-(Starter / Pro / Agence, mensuel / annuel), packs de crédits, gestion des paiements échoués, calcul des coûts.
+| Élément | Détail |
+|---|---|
+| Rédaction par IA | Claude Opus 5.5 (SDK officiel, sortie JSON structurée, effort faible), sur la clé et le crédit Anthropic de l'exploitant. Désactivée sans `ANTHROPIC_API_KEY`. Quota mensuel par offre + plafond global quotidien (`AI_DAILY_BUDGET_USD`). Consignes anti-invention + filtre serveur des affirmations invérifiables. Suggestions relues avant enregistrement |
+| Photos et logo | Stockés sur le disque du serveur (aucun service payant), type réel vérifié, 1,5 Mo max, EXIF retiré, quota par offre, une maquette n'affiche que les images de son propriétaire, déclaration de droits d'utilisation |
+
+## Phase 3 — Commercialisation ✅ (hors administration de la grille, phase 5)
+
+| Élément | État | Détail |
+|---|---|---|
+| Statuts du suivi | ✅ | Lead débloqué, maquette générée (automatique), contacté, relance prévue, réponse reçue, en négociation, gagné, perdu, ne plus contacter ; anciens statuts convertis |
+| Vue en colonnes | ✅ | Glisser-déposer + menu accessible au clavier, vue liste, filtre par statut |
+| Historique, notes, rappels | ✅ | Historique par prospect, rappels du jour et en retard ; « ne plus contacter » coupe relances et envoi |
+| Statistiques réelles | ✅ | Leads, maquettes et visites, messages préparés, contactés, réponses, gagnés, conversion, chiffre d'affaires **déclaré** |
+| Grille d'offres | ✅ | Gratuit / Starter 19 € / Pro 49 € / Agence 99 € HT par mois, annuel = 10 mois ; quotas d'entreprises, maquettes, IA, images, recherches |
+| Packs de crédits | ✅ | 50 entreprises (19 €) / 150 (45 €), sans limite de durée, utilisés après le quota de l'offre, ajout unique par paiement |
+| Paiement échoué | ✅ | Accès maintenu 7 jours, alerte dans l'espace Abonnement, puis retour à l'offre gratuite sans perte de données ; rétabli au paiement |
+| Portail client, résiliation, changement d'offre | ✅ | Portail Stripe (existant) |
+| Webhooks | ✅ | Signés, idempotents ; `invoice.paid` ajouté |
+| Calcul des coûts | ✅ | [COUTS.md](COUTS.md) : marge brute ≈ 93-94 % au quota maximum, seuil de rentabilité 1 à 2 abonnements Pro |
+| Grille modifiable depuis l'administration | ⬜ | Phase 5 (aujourd'hui dans `src/billing.ts`) |
+| Envoi d'emails depuis SitoLead, campagnes | ⬜ | Volontairement non fait : pas de fournisseur payant pendant la phase de test ; l'utilisateur envoie depuis sa messagerie |
+
+Tests : **56 tests, 56 réussis** · TypeScript : **aucune erreur**.
 
 ## Phase 4 — Hébergement des sites vendus ⬜
 

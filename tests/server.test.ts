@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { FREE_UNLOCKS } from '../src/billing.ts';
+import { FREE_UNLOCKS, PLANS } from '../src/billing.ts';
 import { openDatabase, nowIso } from '../src/db.ts';
 import { upsertProspects } from '../src/prospects.ts';
 import { createApp } from '../src/server.ts';
@@ -200,7 +200,7 @@ test(`inscription → ${FREE_UNLOCKS} déblocages offerts → blocage → abonne
 
   const after = await call('GET', '/api/me');
   assert.equal(after.data.user.plan, 'pro');
-  assert.equal(after.data.user.quota.limit, 150);
+  assert.equal(after.data.user.quota.limit, PLANS.pro.unlocks);
   const unlocked = await call('POST', `/api/prospects/${encodeURIComponent(ids[FREE_UNLOCKS]!)}/unlock`, {});
   assert.equal(unlocked.status, 200);
 

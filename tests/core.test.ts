@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { analyzeSite, assertPublicHost, classifyWebsite } from '../src/audit.ts';
-import { FREE_UNLOCKS, effectivePlan, handleStripeEvent, quotaFor, verifyStripeSignature, type UserRow } from '../src/billing.ts';
+import { FREE_UNLOCKS, PLANS, effectivePlan, handleStripeEvent, quotaFor, verifyStripeSignature, type UserRow } from '../src/billing.ts';
 import { openDatabase } from '../src/db.ts';
 import {
   addOptOuts, leadsCsv, listProspects, mask, optOutKey, osmStatus, refreshCityOsm, rescoreIfNeeded, setSiteCheck, shouldRetry, unlockProspect,
@@ -271,7 +271,7 @@ test('webhooks Stripe : activation, idempotence, résiliation', () => {
   assert.equal(handleStripeEvent(db, ev), 'duplicate');
   let row = db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as unknown as UserRow;
   assert.equal(effectivePlan(row).id, 'pro');
-  assert.equal(quotaFor(db, row).limit, 150);
+  assert.equal(quotaFor(db, row).limit, PLANS.pro.unlocks);
 
   handleStripeEvent(db, { id: 'evt_2', type: 'invoice.payment_failed', data: { object: { customer: 'cus_1' } } });
   row = db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as unknown as UserRow;
@@ -293,7 +293,7 @@ test('quota mensuel : les déblocages des mois précédents ne comptent pas', ()
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as unknown as UserRow;
   const q = quotaFor(db, row, new Date('2026-03-20T12:00:00Z'));
   assert.equal(q.used, 1);
-  assert.equal(q.remaining, 149);
+  assert.equal(q.remaining, PLANS.pro.unlocks - 1);
   assert.equal(q.resetsAt, '2026-04-01T00:00:00.000Z');
 });
 

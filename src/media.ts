@@ -11,8 +11,8 @@ import { effectivePlan, type UserRow } from './billing.ts';
 import { nowIso, type DB } from './db.ts';
 
 export const MAX_IMAGE_BYTES = 1_500_000;
-/** Images conservées par compte selon l'offre. */
-export const MEDIA_LIMIT: Record<string, number> = { free: 6, pro: 400, agence: 1500 };
+
+
 
 const EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 export const MEDIA_ID = /^[A-Za-z0-9_-]{22}$/;
@@ -44,7 +44,7 @@ export function stripJpegMetadata(b: Buffer): Buffer {
 }
 
 export function mediaQuota(db: DB, u: UserRow): { limit: number; used: number; remaining: number } {
-  const limit = MEDIA_LIMIT[effectivePlan(u).id] ?? 0;
+  const limit = effectivePlan(u).mediaMax;
   const used = Number((db.prepare('SELECT COUNT(*) AS n FROM media WHERE user_id = ?').get(u.id) as { n: number }).n);
   return { limit, used, remaining: Math.max(0, limit - used) };
 }

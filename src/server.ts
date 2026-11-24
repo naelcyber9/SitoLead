@@ -1,7 +1,7 @@
 // Serveur HTTP sans dépendance : pages SEO, application (/app), API JSON et webhook Stripe.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -9,7 +9,8 @@ import {
 } from './auth.ts';
 import { createHash } from 'node:crypto';
 import {
-  PLANS, createCheckout, createPortal, effectivePlan, handleStripeEvent, quotaFor, stripeConfigured, useSearch, verifyStripeSignature, type UserRow,
+  GRACE_DAYS, PACKS, PLANS, createCheckout, createPackCheckout, createPortal, effectivePlan, graceEndsAt, handleStripeEvent, isPack, isPaidPlan,
+  quotaFor, stripeConfigured, useSearch, verifyStripeSignature, type UserRow,
 } from './billing.ts';
 import { CITIES, TRADES, cityByCode, cityBySlug, tradeBySlug } from './catalog.ts';
 import { nowIso, openDatabase, type DB } from './db.ts';
@@ -74,6 +75,7 @@ export interface AppOptions {
   live: boolean;
   /** Remplaçable dans les tests. */
   checkout?: typeof createCheckout;
+  packCheckout?: typeof createPackCheckout;
   portal?: typeof createPortal;
   /** Rédaction IA (remplaçable dans les tests, aucun appel réel). */
   ai?: Generate;
@@ -181,6 +183,9 @@ function publicUser(db: DB, u: UserRow) {
     planName: plan.name,
     plan_status: u.plan_status,
     period_end: u.period_end,
+    billing_interval: u.billing_interval ?? null,
+    /** Paiement échoué : date jusqu'à laquelle l'accès est maintenu. */
+    graceEndsAt: graceEndsAt(u),
     csv: plan.csv,
     hasBilling: Boolean(u.stripe_customer_id),
     quota: quotaFor(db, u),
@@ -199,6 +204,7 @@ const str = (v: unknown, max: number): string | null => {
 export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { db, appUrl, live } = opts;
   const checkout = opts.checkout ?? createCheckout;
+  const packCheckout = opts.packCheckout ?? createPackCheckout;
   const portal = opts.portal ?? createPortal;
   const authLimiter = new RateLimiter(10, 15 * 60_000);
   const searchLimiter = new RateLimiter(40, 60_000);
@@ -243,12 +249,24 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
     }
   }
 
-  async function serveStatic(res: ServerResponse, rel: string, cache: string): Promise<boolean> {
+  /**
+   * Fichiers de l'application. Le navigateur revérifie à chaque visite (no-cache) et reçoit un
+   * 304 sans contenu si le fichier n'a pas changé : une mise à jour est visible immédiatement.
+   */
+  async function serveStatic(req: IncomingMessage, res: ServerResponse, rel: string): Promise<boolean> {
     const full = normalize(join(WEB_DIR, rel));
     if (!full.startsWith(normalize(WEB_DIR)) || full.includes(`${sep}..`)) return false;
     try {
+      const info = await stat(full);
+      if (!info.isFile()) return false;
+      const lastModified = new Date(Math.floor(info.mtimeMs / 1000) * 1000).toUTCString();
+      const since = Date.parse(String(req.headers['if-modified-since'] ?? ''));
+      if (!Number.isNaN(since) && since >= Math.floor(info.mtimeMs / 1000) * 1000) {
+        res.writeHead(304, { ...SECURITY_HEADERS, 'cache-control': 'no-cache', 'last-modified': lastModified });
+        return void res.end(), true;
+      }
       const data = await readFile(full);
-      send(res, 200, data, MIME[extname(full)] ?? 'application/octet-stream', { 'cache-control': cache });
+      send(res, 200, data, MIME[extname(full)] ?? 'application/octet-stream', { 'cache-control': 'no-cache', 'last-modified': lastModified });
       return true;
     } catch {
       return false;
@@ -286,6 +304,8 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       case 'GET /api/config':
         return json(res, 200, {
           plans: Object.values(PLANS),
+          packs: Object.values(PACKS),
+          graceDays: GRACE_DAYS,
           trades: TRADES.map((t) => ({ slug: t.slug, label: t.label, plural: t.plural })),
           cities: CITIES.map((c) => ({ code: c.code, name: c.name, dep: c.dep })),
           leadStatuses: LEAD_STATUSES,
@@ -541,7 +561,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
 
       case 'GET /api/leads.csv': {
         const u = requireUser(req);
-        if (!effectivePlan(u).csv) throw new HttpError(402, 'L’export CSV est inclus dans les offres Pro et Agence', 'upgrade');
+        if (!effectivePlan(u).csv) throw new HttpError(402, 'L’export CSV est inclus dans toutes les offres payantes', 'upgrade');
         const day = new Date().toISOString().slice(0, 10);
         return send(res, 200, leadsCsv(listLeads(db, u.id)), 'text/csv; charset=utf-8', {
           'content-disposition': `attachment; filename="prospects-sitolead-${day}.csv"`,
@@ -552,13 +572,23 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       case 'POST /api/billing/checkout': {
         const u = requireUser(req);
         if (!stripeConfigured()) throw new HttpError(503, 'Le paiement n’est pas encore configuré sur ce serveur');
-        const plan = (await readJson(req)).plan;
-        if (plan !== 'pro' && plan !== 'agence') throw new HttpError(400, 'Offre inconnue');
+        const b = await readJson(req);
+        if (!isPaidPlan(b.plan)) throw new HttpError(400, 'Offre inconnue');
+        const interval = b.interval === 'year' ? 'year' : 'month';
         const active = effectivePlan(u);
+        // Déjà abonné : changement d'offre, de rythme ou résiliation dans le portail Stripe.
         if (active.id !== 'free' && u.stripe_customer_id) {
           return json(res, 200, { url: await portal(u, appUrl) });
         }
-        return json(res, 200, { url: await checkout(u, plan, appUrl) });
+        return json(res, 200, { url: await checkout(u, b.plan, appUrl, interval) });
+      }
+
+      case 'POST /api/billing/pack': {
+        const u = requireUser(req);
+        if (!stripeConfigured()) throw new HttpError(503, 'Le paiement n’est pas encore configuré sur ce serveur');
+        const pack = (await readJson(req)).pack;
+        if (!isPack(pack)) throw new HttpError(400, 'Pack inconnu');
+        return json(res, 200, { url: await packCheckout(u, pack, appUrl) });
       }
 
       case 'POST /api/billing/portal': {
@@ -762,10 +792,10 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       if (trade) return html(res, 200, seo.tradePage(appUrl, trade));
     }
     if (a === 'app' && parts.length === 1) {
-      if (await serveStatic(res, 'app.html', 'no-cache')) return;
+      if (await serveStatic(req, res, 'app.html')) return;
     }
     if (a === 'assets' && b && parts.length === 2) {
-      if (await serveStatic(res, b, 'public, max-age=3600')) return;
+      if (await serveStatic(req, res, b)) return;
     }
     if (a === 'favicon.ico') {
       res.writeHead(301, { location: '/assets/favicon.svg' });
