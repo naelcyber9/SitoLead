@@ -47,6 +47,7 @@ const MOCKUP_HEADERS: Record<string, string> = {
 };
 
 import { aiConfigured, aiQuota, isTone, suggestTexts, type Generate } from './ai.ts';
+import { STATUS_LABELS, advanceStatus, listEvents, logEvent, migrateStatuses, userStats } from './crm.ts';
 import { deleteAllMedia, deleteMedia, listMedia, mediaQuota, ownsMedia, readMedia, saveImage } from './media.ts';
 
 const creatorOf = (u: Pick<UserRow, 'full_name' | 'agency_name' | 'email' | 'phone'>): Creator => ({
@@ -288,6 +289,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
           trades: TRADES.map((t) => ({ slug: t.slug, label: t.label, plural: t.plural })),
           cities: CITIES.map((c) => ({ code: c.code, name: c.name, dep: c.dep })),
           leadStatuses: LEAD_STATUSES,
+          leadStatusLabels: STATUS_LABELS,
           siteStatuses: Object.fromEntries(
             (['none', 'verified_none', 'social', 'ok', 'weak', 'down', 'unknown', 'pending'] as const).map((s) => [s, statusLabel(s)]),
           ),
@@ -343,7 +345,14 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
             'upgrade',
           );
         }
+        logEvent(db, u.id, lead.id, 'mockup', r.mockup.id);
+        advanceStatus(db, u.id, lead.id, ['debloque'], 'maquette');
         return json(res, 201, { mockup: mockupView(r.mockup, appUrl), mockupQuota: mockupQuota(db, u) });
+      }
+
+      case 'GET /api/stats': {
+        const u = requireUser(req);
+        return json(res, 200, { stats: userStats(db, u.id) });
       }
 
       case 'POST /api/signup':
@@ -650,6 +659,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         throw new HttpError(400, (e as Error).message);
       }
       if (!lead) throw new HttpError(404, 'Prospect non débloqué');
+      logEvent(db, u.id, parts[2]!, 'site_check', kind ?? 'source');
       return json(res, 200, { lead });
     }
     if (parts[1] === 'leads' && parts.length >= 3) {
@@ -664,6 +674,17 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         const lead = updateLead(db, u.id, id, await readJson(req));
         if (!lead) throw new HttpError(404, 'Prospect non débloqué');
         return json(res, 200, { lead });
+      }
+      if (parts.length === 4 && parts[3] === 'events') {
+        if (!getLead(db, u.id, id)) throw new HttpError(404, 'Prospect non débloqué');
+        if (method === 'GET') return json(res, 200, { items: listEvents(db, u.id, id) });
+        if (method === 'POST') {
+          // Seul « message préparé » (copié ou ouvert dans la messagerie) est déclaré par l'interface.
+          const b = await readJson(req);
+          const channel = b.channel === 'email' || b.channel === 'sms' || b.channel === 'call' ? b.channel : 'email';
+          logEvent(db, u.id, id, 'message', channel);
+          return json(res, 201, { ok: true });
+        }
       }
       if (parts.length === 4 && parts[3] === 'pitch' && method === 'GET') {
         const lead = getLead(db, u.id, id);
@@ -796,6 +817,8 @@ export function startServer(opts: Partial<AppOptions> & { port?: number; host?: 
   const server = createServer((req, res) => void handler(req, res));
   server.requestTimeout = 90_000;
   purgeExpiredSessions(db);
+  const migrated = migrateStatuses(db);
+  if (migrated) console.log(`Suivi commercial : ${migrated} statuts convertis vers la nouvelle liste.`);
   const rescored = rescoreIfNeeded(db);
   if (rescored) console.log(`Scores d’opportunité recalculés (nouveau barème) : ${rescored} entreprises.`);
   if (live) scheduleAudits(db);

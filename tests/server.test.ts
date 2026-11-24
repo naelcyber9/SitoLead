@@ -171,9 +171,9 @@ test(`inscription → ${FREE_UNLOCKS} déblocages offerts → blocage → abonne
   assert.equal(pitch.status, 200);
   assert.match(pitch.data.pitch.email, /Nina Dupont/);
   assert.equal(pitch.data.profileComplete, true);
-  const patched = await call('PATCH', `/api/leads/${encodeURIComponent(ids[0]!)}`, { status: 'rdv', next_action_at: '2026-12-01', note: 'Rappeler' });
-  assert.equal(patched.data.lead.lead.status, 'rdv');
-  assert.equal((await call('PATCH', `/api/leads/${encodeURIComponent(ids[0]!)}`, { status: 'nimporte' })).data.lead.lead.status, 'rdv');
+  const patched = await call('PATCH', `/api/leads/${encodeURIComponent(ids[0]!)}`, { status: 'negociation', next_action_at: '2026-12-01', note: 'Rappeler' });
+  assert.equal(patched.data.lead.lead.status, 'negociation');
+  assert.equal((await call('PATCH', `/api/leads/${encodeURIComponent(ids[0]!)}`, { status: 'nimporte' })).data.lead.lead.status, 'negociation');
   assert.equal((await call('GET', `/api/leads/${encodeURIComponent(ids[7]!)}/pitch`)).status, 404); // non débloqué
   const leads = await call('GET', '/api/leads');
   assert.equal(leads.data.items.length, FREE_UNLOCKS);

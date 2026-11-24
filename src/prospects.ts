@@ -8,6 +8,7 @@ import { nowIso, tx, type DB } from './db.ts';
 import { NO_SITE_STATUSES, opportunityDetails, opportunityScore, statusLabel, type ScoreFactor } from './scoring.ts';
 import { fetchOsmCity, fetchSirene, type Commune, type RawProspect } from './sources.ts';
 import { dequeue, nextQueued } from './zones.ts';
+import { LEAD_STATUSES, STATUS_LABELS, logEvent, type LeadStatus } from './crm.ts';
 
 export interface ProspectRow {
   id: string;
@@ -440,6 +441,9 @@ export interface PublicProspect {
     next_action_at: string | null;
     unlocked_at: string;
     updated_at: string;
+    /** Montant du contrat déclaré par l'utilisateur (client gagné), en euros. */
+    deal_amount: number | null;
+    status_changed_at: string | null;
     /** Vérification du site faite par l'utilisateur, propre à son compte. */
     site_check: string | null;
     site_check_url: string | null;
@@ -579,14 +583,16 @@ export function unlockProspect(db: DB, user: UserRow, prospectId: string): Unloc
     if (!existing) {
       if (quotaFor(db, user).remaining <= 0) return { ok: false, reason: 'quota' } as const;
       const now = nowIso();
-      db.prepare('INSERT INTO leads (user_id, prospect_id, unlocked_at, updated_at) VALUES (?, ?, ?, ?)').run(user.id, prospectId, now, now);
+      db.prepare(`INSERT INTO leads (user_id, prospect_id, unlocked_at, updated_at, status, status_changed_at) VALUES (?, ?, ?, ?, 'debloque', ?)`).run(
+        user.id, prospectId, now, now, now,
+      );
+      logEvent(db, user.id, prospectId, 'unlock');
     }
     return { ok: true, prospect: getLead(db, user.id, prospectId)!, already: Boolean(existing) } as const;
   });
 }
 
-export const LEAD_STATUSES = ['a_contacter', 'contacte', 'relance', 'rdv', 'devis', 'gagne', 'perdu'] as const;
-export type LeadStatus = (typeof LEAD_STATUSES)[number];
+export { LEAD_STATUSES, type LeadStatus } from './crm.ts';
 
 type LeadJoin = ProspectRow & {
   status: string;
@@ -594,6 +600,8 @@ type LeadJoin = ProspectRow & {
   next_action_at: string | null;
   unlocked_at: string;
   l_updated: string;
+  deal_amount: number | null;
+  status_changed_at: string | null;
   site_check: string | null;
   site_check_url: string | null;
   check_status: string | null;
@@ -602,7 +610,7 @@ type LeadJoin = ProspectRow & {
   checked_at: string | null;
 };
 
-const LEAD_COLUMNS = `p.*, l.status, l.note, l.next_action_at, l.unlocked_at, l.updated_at AS l_updated,
+const LEAD_COLUMNS = `p.*, l.status, l.note, l.next_action_at, l.unlocked_at, l.updated_at AS l_updated, l.deal_amount, l.status_changed_at,
   l.site_check, l.site_check_url, l.check_status, l.check_score, l.check_issues, l.checked_at`;
 
 const leadOf = (r: LeadJoin) =>
@@ -612,6 +620,8 @@ const leadOf = (r: LeadJoin) =>
     next_action_at: r.next_action_at,
     unlocked_at: r.unlocked_at,
     updated_at: r.l_updated,
+    deal_amount: r.deal_amount,
+    status_changed_at: r.status_changed_at,
     site_check: r.site_check,
     site_check_url: r.site_check_url,
     checked_at: r.checked_at,
@@ -687,7 +697,12 @@ export function rescoreIfNeeded(db: DB): number {
   return rows.length;
 }
 
-export function updateLead(db: DB, userId: number, prospectId: string, patch: { status?: unknown; note?: unknown; next_action_at?: unknown }): PublicProspect | null {
+export function updateLead(
+  db: DB,
+  userId: number,
+  prospectId: string,
+  patch: { status?: unknown; note?: unknown; next_action_at?: unknown; deal_amount?: unknown },
+): PublicProspect | null {
   const cur = getLead(db, userId, prospectId);
   if (!cur?.lead) return null;
   const status = typeof patch.status === 'string' && (LEAD_STATUSES as readonly string[]).includes(patch.status) ? patch.status : cur.lead.status;
@@ -695,9 +710,24 @@ export function updateLead(db: DB, userId: number, prospectId: string, patch: { 
   let next = cur.lead.next_action_at;
   if (patch.next_action_at === null || patch.next_action_at === '') next = null;
   else if (typeof patch.next_action_at === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(patch.next_action_at)) next = patch.next_action_at;
-  db.prepare('UPDATE leads SET status = ?, note = ?, next_action_at = ?, updated_at = ? WHERE user_id = ? AND prospect_id = ?').run(
-    status, note, next, nowIso(), userId, prospectId,
-  );
+  // Un prospect qui ne veut plus être contacté n'a plus de relance programmée.
+  if (status === 'stop') next = null;
+  let amount = cur.lead.deal_amount;
+  if (patch.deal_amount === null || patch.deal_amount === '') amount = null;
+  else if (patch.deal_amount !== undefined) {
+    const v = Number(String(patch.deal_amount).replace(',', '.').replace(/\s/g, ''));
+    if (Number.isFinite(v) && v >= 0 && v <= 10_000_000) amount = Math.round(v * 100) / 100;
+  }
+  const now = nowIso();
+  tx(db, () => {
+    db.prepare(
+      `UPDATE leads SET status = ?, note = ?, next_action_at = ?, deal_amount = ?, updated_at = ?,
+       status_changed_at = CASE WHEN status != ? THEN ? ELSE status_changed_at END WHERE user_id = ? AND prospect_id = ?`,
+    ).run(status, note, next, amount, now, status, now, userId, prospectId);
+    if (status !== cur.lead!.status) logEvent(db, userId, prospectId, 'status', status);
+    if (note !== cur.lead!.note) logEvent(db, userId, prospectId, 'note');
+    if (amount !== cur.lead!.deal_amount && amount !== null) logEvent(db, userId, prospectId, 'amount', String(amount));
+  });
   return getLead(db, userId, prospectId);
 }
 
@@ -708,10 +738,10 @@ const csvCell = (v: unknown) => {
 };
 
 export function leadsCsv(leads: PublicProspect[]): string {
-  const head = ['Nom', 'Métier', 'Adresse', 'Code postal', 'Ville', 'Téléphone', 'Email', 'Site', 'État du site', 'Score site', 'Opportunité', 'Statut', 'Prochaine action', 'Note', 'SIRET'];
+  const head = ['Nom', 'Métier', 'Adresse', 'Code postal', 'Ville', 'Téléphone', 'Email', 'Site', 'État du site', 'Score site', 'Opportunité', 'Statut', 'Prochaine action', 'Montant déclaré (€)', 'Note', 'SIRET', 'Source'];
   const lines = leads.map((l) =>
     [l.name, l.tradeLabel, l.address, l.postal_code, l.city, l.phone, l.email, l.website, l.statusLabel, l.audit_score, l.opportunity,
-      l.lead?.status, l.lead?.next_action_at, l.lead?.note, l.siret].map(csvCell).join(';'),
+      l.lead ? (STATUS_LABELS[l.lead.status as LeadStatus] ?? l.lead.status) : '', l.lead?.next_action_at, l.lead?.deal_amount, l.lead?.note, l.siret, l.sourceLabel].map(csvCell).join(';'),
   );
   return '﻿' + [head.join(';'), ...lines].join('\r\n');
 }

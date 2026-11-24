@@ -141,6 +141,10 @@
     <div class="pipeline-head">
       <h1>Mes prospects</h1>
       <div class="row">
+        <div class="row view-toggle" role="group" aria-label="Affichage">
+          <button type="button" class="chip" data-leads-view="kanban" aria-pressed="true">Colonnes</button>
+          <button type="button" class="chip" data-leads-view="list" aria-pressed="false">Liste</button>
+        </div>
         <label class="small">Statut
           <select id="lead-filter"><option value="">Tous</option></select>
         </label>
@@ -148,6 +152,8 @@
       </div>
     </div>
     <div class="kpis" id="kpis"></div>
+    <p class="small muted" id="kpi-note">Statistiques réelles : SitoLead compte ce qu’il constate (déblocages, maquettes, visites, messages préparés) et les statuts et montants que vous saisissez.</p>
+    <div id="reminders"></div>
     <div id="leads"></div>
   </section>
 

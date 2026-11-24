@@ -127,6 +127,17 @@ CREATE TABLE IF NOT EXISTS mockup_events (
 );
 CREATE INDEX IF NOT EXISTS idx_mockup_events ON mockup_events (user_id, created_at);
 
+-- Historique du suivi commercial (déblocage, statuts, maquettes, messages préparés…).
+CREATE TABLE IF NOT EXISTS lead_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  prospect_id TEXT NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  at          TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_lead_events ON lead_events (user_id, prospect_id, id);
+
 -- Rédactions IA : quota par utilisateur et budget quotidien global (coût estimé en USD).
 CREATE TABLE IF NOT EXISTS ai_usage (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -212,6 +223,9 @@ const COLUMNS: Record<string, [string, string][]> = {
     ['check_score', 'INTEGER'],
     ['check_issues', 'TEXT'],
     ['checked_at', 'TEXT'],
+    // Suivi commercial : montant du contrat déclaré par l'utilisateur, date du dernier changement de statut.
+    ['deal_amount', 'REAL'],
+    ['status_changed_at', 'TEXT'],
   ],
 };
 

@@ -9,15 +9,10 @@
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
   const today = () => new Date().toISOString().slice(0, 10);
 
-  const STATUS_LABELS = {
-    a_contacter: 'À contacter',
-    contacte: 'Contacté',
-    relance: 'Relancé',
-    rdv: 'Rendez-vous',
-    devis: 'Devis envoyé',
-    gagne: 'Gagné',
-    perdu: 'Perdu',
-  };
+  // Libellés des statuts du suivi commercial (remplacés au démarrage par ceux du serveur).
+  let STATUS_LABELS = {};
+  const CLOSED = ['gagne', 'perdu', 'stop'];
+  const fmtEur = (n) => `${Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} €`;
   const VIEWS = { search: 'recherche', leads: 'prospects', mockups: 'maquettes', billing: 'abonnement', profile: 'profil' };
   const HASH_TO_VIEW = Object.fromEntries(Object.entries(VIEWS).map(([k, v]) => [v, k]));
 
@@ -600,10 +595,12 @@
     $('#lead-body').innerHTML = '<div class="loading"><span class="spinner" aria-hidden="true"></span></div>';
     if (!dlg.open) dlg.showModal();
     try {
-      const [{ lead }, { items: mockups }] = await Promise.all([
+      const [{ lead }, { items: mockups }, { items: events }] = await Promise.all([
         api(`/api/leads/${encodeURIComponent(id)}`),
         api(`/api/mockups?prospect=${encodeURIComponent(id)}`),
+        api(`/api/leads/${encodeURIComponent(id)}/events`),
       ]);
+      state.leadEvents = events;
       // Le message intègre le lien de la maquette active la plus récente et le prix saisi.
       const mockup = mockups.find((m) => m.active) ?? null;
       const price = store.get(`price.${id}`) ?? '';
@@ -617,6 +614,20 @@
       dlg.close();
       handleError(e);
     }
+  }
+
+  /** « Message préparé » : enregistré dans l'historique (SitoLead ne peut pas savoir s'il a été envoyé). */
+  function logMessage(channel) {
+    if (!currentLead) return;
+    api(`/api/leads/${encodeURIComponent(currentLead.id)}/events`, { method: 'POST', body: { channel } }).catch(() => {});
+  }
+
+  const EVENT_LABELS = { unlock: 'Entreprise débloquée', mockup: 'Maquette générée', note: 'Note modifiée', site_check: 'Vérification du site', amount: 'Montant déclaré' };
+  function eventLabel(e) {
+    if (e.kind === 'status') return `Statut : ${STATUS_LABELS[e.detail] ?? e.detail}`;
+    if (e.kind === 'message') return `Message préparé (${e.detail === 'sms' ? 'SMS' : e.detail === 'call' ? 'script d’appel' : 'email'})`;
+    if (e.kind === 'amount') return `Montant déclaré : ${fmtEur(e.detail)}`;
+    return EVENT_LABELS[e.kind] ?? e.kind;
   }
 
   function renderLead(p, pitch, profileComplete, mockups = [], price = '') {
@@ -704,11 +715,19 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
 <form id="lead-form" novalidate>
   <div class="grid-2">
     <label class="field"><span>Statut</span><select name="status">${statuses}</select></label>
-    <label class="field"><span>Prochaine action</span><input type="date" name="next_action_at" value="${h(p.lead.next_action_at ?? '')}"></label>
+    <label class="field"><span>Rappel / prochaine action</span><input type="date" name="next_action_at" value="${h(p.lead.next_action_at ?? '')}"></label>
   </div>
+  <label class="field"><span>Montant du contrat signé (€, si client gagné)</span><input name="deal_amount" inputmode="decimal" placeholder="Ex. 990" value="${h(p.lead.deal_amount ?? '')}"></label>
   <label class="field"><span>Notes</span><textarea name="note" maxlength="5000" placeholder="Ex. rappeler mardi, intéressé par la prise de rendez-vous en ligne">${h(p.lead.note)}</textarea></label>
   <button class="btn btn-sm" type="submit">Enregistrer le suivi</button>
-</form>`;
+</form>
+<details class="history"><summary>Historique (${(state.leadEvents ?? []).length})</summary><ul>${(state.leadEvents ?? [])
+      .map((e) => `<li><span class="muted small">${h(new Date(e.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }))}</span> ${h(eventLabel(e))}</li>`)
+      .join('')}</ul></details>`;
+    if (p.lead.status === 'stop') {
+      $('#lead-body').insertAdjacentHTML('afterbegin', '<p class="notice warn">Cette entreprise ne souhaite plus être contactée : ne lui envoyez plus de message.</p>');
+      $$('#copy-pitch, #mail-pitch', $('#lead-body')).forEach((b) => (b.disabled = true));
+    }
 
     // Textes modifiables : les modifications de chaque onglet sont conservées tant que la fiche est ouverte.
     const texts = { email: pitch.email, call: pitch.call, sms: pitch.sms };
@@ -728,11 +747,13 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       try {
         await navigator.clipboard.writeText(text);
         toast('Message copié');
+        logMessage(current);
       } catch {
         toast('Copie impossible : sélectionnez le texte manuellement');
       }
     });
     $('#mail-pitch')?.addEventListener('click', () => {
+      logMessage('email');
       // Le logiciel de messagerie de l'utilisateur s'ouvre avec le message relu : rien n'est envoyé par SitoLead.
       location.href = `mailto:${encodeURIComponent(p.email)}?subject=${encodeURIComponent($('#pitch-subject').value)}&body=${encodeURIComponent(texts.email)}`;
     });
@@ -790,7 +811,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       try {
         const { lead } = await api(`/api/leads/${encodeURIComponent(currentLead.id)}`, {
           method: 'PATCH',
-          body: { status: fd.get('status'), next_action_at: fd.get('next_action_at') || null, note: fd.get('note') },
+          body: { status: fd.get('status'), next_action_at: fd.get('next_action_at') || null, note: fd.get('note'), deal_amount: fd.get('deal_amount') || null },
         });
         currentLead = lead;
         toast('Suivi enregistré');
@@ -1046,8 +1067,9 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
   async function loadLeads() {
     $('#leads').innerHTML = '<div class="loading"><span class="spinner" aria-hidden="true"></span></div>';
     try {
-      const data = await api('/api/leads');
+      const [data, { stats }] = await Promise.all([api('/api/leads'), api('/api/stats')]);
       state.leads = data.items;
+      state.stats = stats;
       setUser({ ...state.user, quota: data.quota });
       renderLeads();
     } catch (e) {
@@ -1055,21 +1077,76 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     }
   }
 
+  const isDue = (l) => l.lead.next_action_at && l.lead.next_action_at <= today() && !CLOSED.includes(l.lead.status);
+
+  function renderKpis() {
+    const s = state.stats;
+    if (!s) return;
+    const rate = s.conversionRate === null ? '—' : `${Math.round(s.conversionRate * 100)} %`;
+    $('#kpis').innerHTML = [
+      [fmt(s.unlocked), 'leads débloqués'],
+      [fmt(s.mockups), `maquettes générées · ${fmt(s.mockupViews)} visite${s.mockupViews > 1 ? 's' : ''}`],
+      [fmt(s.messagesPrepared), 'messages préparés'],
+      [fmt(s.contacted), 'prospects contactés'],
+      [fmt(s.replies), 'réponses enregistrées'],
+      [fmt(s.won), 'clients gagnés'],
+      [rate, 'taux de conversion (gagnés / contactés)'],
+      [fmtEur(s.revenue), 'chiffre d’affaires déclaré'],
+    ]
+      .map(([n, l]) => `<div class="kpi"><strong>${h(n)}</strong><span>${h(l)}</span></div>`)
+      .join('');
+  }
+
+  function renderReminders() {
+    const due = state.leads.filter(isDue).sort((a, b) => a.lead.next_action_at.localeCompare(b.lead.next_action_at));
+    $('#reminders').innerHTML = due.length
+      ? `<div class="panel reminders"><h2 class="section-title">À faire aujourd’hui (${due.length})</h2><ul>${due
+          .map(
+            (l) => `<li><button type="button" class="btn-link" data-open="${h(l.id)}"><strong>${h(l.name)}</strong></button> · ${h(STATUS_LABELS[l.lead.status] ?? l.lead.status)}${
+              l.lead.next_action_at < today() ? ` · <span class="due">en retard depuis le ${h(fmtDate(l.lead.next_action_at))}</span>` : ''
+            }</li>`,
+          )
+          .join('')}</ul></div>`
+      : '';
+  }
+
+  function renderKanban(list) {
+    const cols = state.config.leadStatuses.filter((s) => !state.leadFilter || s === state.leadFilter);
+    return `<div class="kanban">${cols
+      .map((s) => {
+        const items = list.filter((l) => l.lead.status === s);
+        return `<section class="kanban-col" data-drop="${h(s)}" aria-label="${h(STATUS_LABELS[s] ?? s)}">
+  <h3>${h(STATUS_LABELS[s] ?? s)} <span class="muted">${items.length}</span></h3>
+  ${items
+    .map(
+      (l) => `<article class="kanban-card${isDue(l) ? ' is-due' : ''}" draggable="true" data-card="${h(l.id)}">
+    <button type="button" class="btn-link" data-open="${h(l.id)}"><strong>${h(l.name)}</strong></button>
+    <p class="small muted">${h(l.tradeLabel)} · ${h(l.city ?? '')}</p>
+    ${l.lead.next_action_at && !CLOSED.includes(l.lead.status) ? `<p class="small${isDue(l) ? ' due' : ''}">Rappel : ${h(fmtDate(l.lead.next_action_at))}</p>` : ''}
+    ${l.lead.deal_amount && s === 'gagne' ? `<p class="small"><strong>${h(fmtEur(l.lead.deal_amount))}</strong></p>` : ''}
+    <label class="sr-only" for="mv-${h(l.id)}">Déplacer ${h(l.name)}</label>
+    <select id="mv-${h(l.id)}" class="kanban-move" data-status-for="${h(l.id)}">${state.config.leadStatuses
+      .map((x) => `<option value="${x}"${x === s ? ' selected' : ''}>${h(STATUS_LABELS[x] ?? x)}</option>`)
+      .join('')}</select>
+  </article>`,
+    )
+    .join('')}
+</section>`;
+      })
+      .join('')}</div>`;
+  }
+
   function renderLeads() {
     const leads = state.leads;
-    const due = leads.filter((l) => l.lead.next_action_at && l.lead.next_action_at <= today() && !['gagne', 'perdu'].includes(l.lead.status));
-    const count = (s) => leads.filter((l) => l.lead.status === s).length;
-    $('#kpis').innerHTML = [
-      [leads.length, 'prospects débloqués'],
-      [due.length, 'à relancer aujourd’hui'],
-      [count('rdv') + count('devis'), 'en rendez-vous ou devis'],
-      [count('gagne'), 'clients gagnés'],
-    ]
-      .map(([n, l]) => `<div class="kpi"><strong>${fmt(n)}</strong><span>${h(l)}</span></div>`)
-      .join('');
+    renderKpis();
+    renderReminders();
     const list = state.leadFilter ? leads.filter((l) => l.lead.status === state.leadFilter) : leads;
     if (!leads.length) {
       $('#leads').innerHTML = `<div class="empty"><p><strong>Aucun prospect pour l’instant.</strong></p><p>Lancez une recherche et débloquez vos premières entreprises.</p><button type="button" class="btn" data-goto="search">Trouver des clients</button></div>`;
+      return;
+    }
+    if (state.leadsView !== 'list') {
+      $('#leads').innerHTML = renderKanban(list);
       return;
     }
     if (!list.length) {
@@ -1081,7 +1158,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
 <thead><tr><th scope="col">Entreprise</th><th scope="col">Contact</th><th scope="col">Site</th><th scope="col">Statut</th><th scope="col">Prochaine action</th></tr></thead>
 <tbody>${list
       .map((l) => {
-        const isDue = l.lead.next_action_at && l.lead.next_action_at <= today() && !['gagne', 'perdu'].includes(l.lead.status);
+        const due = isDue(l);
         return `<tr>
   <td><button type="button" class="btn-link" data-open="${h(l.id)}"><strong>${h(l.name)}</strong></button><br><span class="small muted">${h(l.tradeLabel)} · ${h(l.city ?? '')}</span></td>
   <td class="small">${l.phone ? `<a href="tel:${h(l.phone.replace(/\s/g, ''))}">${h(l.phone)}</a>` : ''}${l.phone && l.email ? '<br>' : ''}${l.email ? `<a href="mailto:${h(l.email)}">${h(l.email)}</a>` : ''}${!l.phone && !l.email ? '<span class="muted">À trouver</span>' : ''}</td>
@@ -1089,7 +1166,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
   <td><select data-status-for="${h(l.id)}" aria-label="Statut de ${h(l.name)}">${statuses
     .map((s) => `<option value="${s}"${l.lead.status === s ? ' selected' : ''}>${h(STATUS_LABELS[s] ?? s)}</option>`)
     .join('')}</select></td>
-  <td class="${isDue ? 'due' : ''}">${l.lead.next_action_at ? h(new Date(l.lead.next_action_at).toLocaleDateString('fr-FR')) : '<span class="muted">—</span>'}${isDue ? ' · à faire' : ''}</td>
+  <td class="${due ? 'due' : ''}">${l.lead.next_action_at ? h(new Date(l.lead.next_action_at).toLocaleDateString('fr-FR')) : '<span class="muted">—</span>'}${due ? ' · à faire' : ''}</td>
 </tr>`;
       })
       .join('')}</tbody></table>`;
@@ -1102,23 +1179,63 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       state.leadFilter = filter.value;
       renderLeads();
     });
-    $('#leads').addEventListener('click', (e) => {
-      const open = e.target.closest('[data-open]');
-      if (open) openLead(open.dataset.open);
-      if (e.target.closest('[data-goto]')) go('search');
-    });
-    $('#leads').addEventListener('change', async (e) => {
-      const sel = e.target.closest('[data-status-for]');
-      if (!sel) return;
+    state.leadsView = store.get('leadsView') ?? 'kanban';
+    const syncViewToggle = () => $$('[data-leads-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.leadsView === state.leadsView)));
+    syncViewToggle();
+    $$('[data-leads-view]').forEach((b) =>
+      b.addEventListener('click', () => {
+        state.leadsView = b.dataset.leadsView;
+        store.set('leadsView', state.leadsView);
+        syncViewToggle();
+        renderLeads();
+      }),
+    );
+    for (const zone of ['#leads', '#reminders']) {
+      $(zone).addEventListener('click', (e) => {
+        const open = e.target.closest('[data-open]');
+        if (open) openLead(open.dataset.open);
+        if (e.target.closest('[data-goto]')) go('search');
+      });
+    }
+    const moveLead = async (id, status) => {
       try {
-        const { lead } = await api(`/api/leads/${encodeURIComponent(sel.dataset.statusFor)}`, { method: 'PATCH', body: { status: sel.value } });
+        const { lead } = await api(`/api/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } });
         const i = state.leads.findIndex((l) => l.id === lead.id);
         if (i >= 0) state.leads[i] = lead;
+        state.stats = (await api('/api/stats')).stats;
         renderLeads();
-        toast(`Statut : ${STATUS_LABELS[lead.lead.status]}`);
+        toast(`${lead.name} : ${STATUS_LABELS[lead.lead.status]}`);
+        if (status === 'gagne' && !lead.lead.deal_amount) openLead(id); // pour saisir le montant du contrat
       } catch (err) {
         handleError(err);
+        renderLeads();
       }
+    };
+    $('#leads').addEventListener('change', (e) => {
+      const sel = e.target.closest('[data-status-for]');
+      if (sel) moveLead(sel.dataset.statusFor, sel.value);
+    });
+    // Glisser-déposer entre colonnes (le menu « Déplacer » reste disponible au clavier et sur mobile).
+    $('#leads').addEventListener('dragstart', (e) => {
+      const card = e.target.closest('[data-card]');
+      if (card) e.dataTransfer.setData('text/plain', card.dataset.card);
+    });
+    $('#leads').addEventListener('dragover', (e) => {
+      const col = e.target.closest('[data-drop]');
+      if (col) {
+        e.preventDefault();
+        col.classList.add('is-over');
+      }
+    });
+    $('#leads').addEventListener('dragleave', (e) => e.target.closest('[data-drop]')?.classList.remove('is-over'));
+    $('#leads').addEventListener('drop', (e) => {
+      const col = e.target.closest('[data-drop]');
+      if (!col) return;
+      e.preventDefault();
+      col.classList.remove('is-over');
+      const id = e.dataTransfer.getData('text/plain');
+      const l = state.leads.find((x) => x.id === id);
+      if (l && l.lead.status !== col.dataset.drop) moveLead(id, col.dataset.drop);
     });
     $('#csv-btn').addEventListener('click', () => {
       if (!state.user.csv) return openUpgrade('L’export CSV est inclus dans les offres Pro et Agence.');
@@ -1295,6 +1412,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     try {
       const [config, me] = await Promise.all([api('/api/config'), api('/api/me')]);
       state.config = config;
+      STATUS_LABELS = config.leadStatusLabels ?? {};
       bindAuth();
       bindSearch();
       bindLeads();

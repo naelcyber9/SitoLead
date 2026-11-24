@@ -374,3 +374,22 @@ fieldset.images { border: 1px solid var(--line); border-radius: var(--radius-sm)
 .image-slot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .image-slot > span { min-width: 110px; font-weight: 600; font-size: .92rem; }
 .image-slot img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+
+/* --- Suivi commercial (phase 3) ------------------------------------------------------ */
+.kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.view-toggle { gap: 6px; }
+.reminders { padding: 14px 18px; }
+.reminders ul { margin: 6px 0 0; padding-left: 18px; }
+.reminders .section-title { margin-top: 0; }
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 12px; align-items: start; }
+.kanban-col { background: var(--surface-2); border-radius: var(--radius); padding: 10px; min-height: 120px; }
+.kanban-col.is-over { outline: 2px dashed var(--brand); }
+.kanban-col h3 { font-size: .95rem; margin: 2px 4px 10px; display: flex; justify-content: space-between; }
+.kanban-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px; cursor: grab; }
+.kanban-card p { margin: 2px 0; }
+.kanban-card.is-due { border-left: 4px solid var(--hot); }
+.kanban-move { width: 100%; min-height: 32px; margin-top: 6px; font-size: .85rem; padding: 4px 8px; }
+.due { color: var(--hot); font-weight: 600; }
+.history { margin-top: 14px; }
+.history summary { cursor: pointer; font-weight: 600; }
+.history ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; font-size: .92rem; }
