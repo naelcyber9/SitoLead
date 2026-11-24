@@ -14,6 +14,11 @@ export interface Plan {
   unlocks: number;
   monthly: boolean;
   csv: boolean;
+  /**
+   * Recherches distinctes (zone × métier × filtres) par jour. Une recherche coûte des appels aux
+   * sources même sans déblocage : elle est donc plafonnée, y compris sur les offres payantes.
+   */
+  searchesPerDay: number;
   features: string[];
 }
 
@@ -27,6 +32,7 @@ export const PLANS: Record<PlanId, Plan> = {
     unlocks: FREE_UNLOCKS,
     monthly: false,
     csv: false,
+    searchesPerDay: 20,
     features: [`${FREE_UNLOCKS} entreprises offertes avec coordonnées`, 'Audit complet de leur site', 'Messages de prospection prêts à envoyer', 'Suivi des prospects'],
   },
   pro: {
@@ -36,6 +42,7 @@ export const PLANS: Record<PlanId, Plan> = {
     unlocks: 150,
     monthly: true,
     csv: true,
+    searchesPerDay: 200,
     features: ['150 entreprises par mois', 'Toutes les villes et tous les métiers', 'Audit de site + score d’opportunité', 'Email, appel et SMS personnalisés', 'Pipeline de suivi + relances', 'Export CSV'],
   },
   agence: {
@@ -45,6 +52,7 @@ export const PLANS: Record<PlanId, Plan> = {
     unlocks: 1000,
     monthly: true,
     csv: true,
+    searchesPerDay: 600,
     features: ['1 000 entreprises par mois', 'Tout ce qui est inclus dans Pro', 'Idéal pour une équipe commerciale', 'Support prioritaire'],
   },
 };
@@ -90,6 +98,25 @@ export function quotaFor(db: DB, u: UserRow, now = new Date()): Quota {
   }
   const used = Number((db.prepare('SELECT COUNT(*) AS n FROM leads WHERE user_id = ? AND unlocked_at >= ?').get(u.id, since) as { n: number }).n);
   return { plan: plan.id, limit: plan.unlocks, used, remaining: Math.max(0, plan.unlocks - used), resetsAt };
+}
+
+/**
+ * Compte une recherche distincte du jour et dit si elle est autorisée. Relancer la même
+ * recherche (pagination, rafraîchissement automatique) ne consomme rien.
+ */
+export function useSearch(db: DB, u: UserRow, key: string, now = new Date()): { allowed: boolean; used: number; limit: number } {
+  const limit = effectivePlan(u).searchesPerDay;
+  const day = now.toISOString().slice(0, 10);
+  const count = () => Number((db.prepare('SELECT COUNT(*) AS n FROM search_usage WHERE user_id = ? AND day = ?').get(u.id, day) as { n: number }).n);
+  if (db.prepare('SELECT 1 FROM search_usage WHERE user_id = ? AND day = ? AND key = ?').get(u.id, day, key)) {
+    return { allowed: true, used: count(), limit };
+  }
+  const used = count();
+  if (used >= limit) return { allowed: false, used, limit };
+  db.prepare('INSERT INTO search_usage (user_id, day, key) VALUES (?, ?, ?)').run(u.id, day, key);
+  // Ménage : l'historique au-delà de 60 jours ne sert plus.
+  if (Math.random() < 0.01) db.prepare('DELETE FROM search_usage WHERE day < ?').run(new Date(now.getTime() - 60 * 86_400_000).toISOString().slice(0, 10));
+  return { allowed: true, used: used + 1, limit };
 }
 
 // --- Stripe -------------------------------------------------------------------

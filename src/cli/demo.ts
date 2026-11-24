@@ -37,12 +37,12 @@ for (const p of cas) {
 }
 
 if (process.argv.includes('--live')) {
-  const { fetchOsm, communeByCode } = await import('../sources.ts');
+  const { fetchOsmCity, communeByCode } = await import('../sources.ts');
   const { tradeBySlug } = await import('../catalog.ts');
   const commune = await communeByCode('83126'); // La Seyne-sur-Mer
   const trade = tradeBySlug('boulangerie')!;
   if (commune) {
-    const found = await fetchOsm(commune, trade);
+    const found = (await fetchOsmCity(commune, [trade])).get(trade.slug) ?? [];
     const sans = found.filter((f) => classifyWebsite(f.website) !== 'site');
     console.log(`\nLIVE OpenStreetMap — ${trade.plural} à ${commune.nom} : ${found.length} trouvées, ${sans.length} sans vrai site.`);
     for (const f of sans.slice(0, 10)) console.log(`  - ${f.name} | ${f.phone ?? 'tél. ?'} | ${f.website ?? 'aucun site'}`);

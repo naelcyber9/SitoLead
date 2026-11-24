@@ -4,9 +4,14 @@ import { createHmac } from 'node:crypto';
 import { analyzeSite, assertPublicHost, classifyWebsite } from '../src/audit.ts';
 import { FREE_UNLOCKS, effectivePlan, handleStripeEvent, quotaFor, verifyStripeSignature, type UserRow } from '../src/billing.ts';
 import { openDatabase } from '../src/db.ts';
-import { addOptOuts, leadsCsv, listProspects, mask, optOutKey, unlockProspect, upsertProspects, type PublicProspect } from '../src/prospects.ts';
-import { buildPitch, opportunityScore } from '../src/scoring.ts';
-import { osmToProspect, prettyName, sireneOptOuts, sireneToProspects, type RawProspect } from '../src/sources.ts';
+import {
+  addOptOuts, leadsCsv, listProspects, mask, optOutKey, osmStatus, refreshCityOsm, rescoreIfNeeded, setSiteCheck, shouldRetry, unlockProspect,
+  upsertProspects, type PublicProspect,
+} from '../src/prospects.ts';
+import { TRADES } from '../src/catalog.ts';
+import { buildPitch, opportunityDetails, opportunityScore } from '../src/scoring.ts';
+import { distanceKm, parseZone } from '../src/zones.ts';
+import { osmToProspect, osmTrade, prettyName, sireneCommuneCodes, sireneOptOuts, sireneToProspects, type RawProspect } from '../src/sources.ts';
 
 const raw = (over: Partial<RawProspect> = {}): RawProspect => ({
   id: 'osm:node/1',
@@ -290,4 +295,130 @@ test('quota mensuel : les déblocages des mois précédents ne comptent pas', ()
   assert.equal(q.used, 1);
   assert.equal(q.remaining, 149);
   assert.equal(q.resetsAt, '2026-04-01T00:00:00.000Z');
+});
+
+// --- Collecte par commune et préchargement ------------------------------------------------
+
+test('osmTrade classe un élément OpenStreetMap dans le bon métier', () => {
+  assert.equal(osmTrade({ craft: 'plumber', name: 'X' }, TRADES)?.slug, 'plombier');
+  assert.equal(osmTrade({ shop: 'bakery', name: 'X' }, TRADES)?.slug, 'boulangerie');
+  assert.equal(osmTrade({ shop: 'supermarket', name: 'X' }, TRADES), undefined);
+  assert.equal(osmTrade(undefined, TRADES), undefined);
+});
+
+test('SIRENE : Paris, Lyon et Marseille sont cherchées par arrondissement', () => {
+  assert.equal(sireneCommuneCodes('75056').length, 20);
+  assert.equal(sireneCommuneCodes('75056')[0], '75101');
+  assert.deepEqual(sireneCommuneCodes('69123').slice(0, 2), ['69381', '69382']);
+  assert.equal(sireneCommuneCodes('13055').at(-1), '13216');
+  assert.deepEqual(sireneCommuneCodes('74010'), ['74010']);
+  const lyon = { code: '69123', nom: 'Lyon', departement: '69', population: 0, codesPostaux: [] };
+  const etab = {
+    siret: '12345678900011', commune: '69383', etat_administratif: 'A', activite_principale: '96.02A', adresse: '3 RUE X 69003 LYON',
+    code_postal: '69003', libelle_commune: 'LYON 3EME', date_creation: '2026-03-01', latitude: null, longitude: null, nom_commercial: null, liste_enseignes: null,
+  };
+  assert.equal(sireneToProspects([{ nom_complet: 'SALON', statut_diffusion: 'O', matching_etablissements: [etab] }], lyon, '96.02A', 24, new Date('2026-06-01')).length, 1);
+});
+
+test('refreshCityOsm charge tous les métiers d’une commune en une fois, et espace les tentatives après un échec', async () => {
+  const db = openDatabase(':memory:');
+  const commune = { code: '74010', nom: 'Annecy', departement: '74', population: 0, codesPostaux: [] };
+  let calls = 0;
+  await refreshCityOsm(db, commune, async () => {
+    calls++;
+    return new Map([
+      ['plombier', [raw({ id: 'osm:node/1' })]],
+      ['coiffeur', [raw({ id: 'osm:node/2', name: 'Salon' })]],
+    ]);
+  });
+  assert.equal(calls, 1);
+  const trades = (db.prepare('SELECT trade FROM prospects ORDER BY trade').all() as { trade: string }[]).map((r) => r.trade);
+  assert.deepEqual(trades, ['coiffeur', 'plombier']);
+  assert.equal(osmStatus(db, '74010').fresh, true);
+
+  const fail = async (): Promise<Map<string, RawProspect[]>> => {
+    throw new Error('OpenStreetMap ne répond pas');
+  };
+  await assert.rejects(refreshCityOsm(db, { ...commune, code: '35238', nom: 'Rennes' }, fail));
+  const st = osmStatus(db, '35238');
+  assert.equal(st.fresh, false);
+  assert.equal(st.retryLater, true);
+  assert.match(st.error ?? '', /ne répond pas/);
+});
+
+test('shouldRetry : seule une recherche incomplète et assez ancienne est retentée', () => {
+  const old = new Date(Date.now() - 10 * 60_000).toISOString();
+  const recent = new Date().toISOString();
+  assert.equal(shouldRetry({ fetched_at: old, found: 3, errors: ['OSM'], fresh: true }), true);
+  assert.equal(shouldRetry({ fetched_at: recent, found: 3, errors: ['OSM'], fresh: true }), false);
+  assert.equal(shouldRetry({ fetched_at: old, found: 3, errors: [], fresh: true }), false);
+});
+
+// --- Phase 1 : zones, score expliqué, vérification du site, filtres -----------------------
+
+test('parseZone accepte commune, département, région et rayon, refuse le reste', () => {
+  assert.deepEqual(parseZone('commune:74010'), { kind: 'commune', code: '74010' });
+  assert.deepEqual(parseZone('departement:2a'), { kind: 'departement', code: '2A' });
+  assert.deepEqual(parseZone('departement:971'), { kind: 'departement', code: '971' });
+  assert.deepEqual(parseZone('region:84'), { kind: 'region', code: '84' });
+  assert.deepEqual(parseZone('rayon:74010:20'), { kind: 'rayon', code: '74010', km: 20 });
+  assert.equal(parseZone('rayon:74010:7'), null); // rayon hors liste
+  assert.equal(parseZone('departement:99'), null);
+  assert.equal(parseZone("commune:74010' OR 1=1"), null);
+  assert.equal(parseZone(''), null);
+  assert.ok(Math.abs(distanceKm({ lat: 45.899, lon: 6.129 }, { lat: 45.564, lon: 5.917 }) - 41) < 2); // Annecy → Chambéry
+});
+
+test('score expliqué : la somme des critères donne le score, l’absence vérifiée pèse plus que l’absence non renseignée', () => {
+  const base = { audit_score: null, phone: '0450', email: null, created_on: null };
+  const unverified = opportunityDetails({ ...base, site_status: 'none' });
+  const verified = opportunityDetails({ ...base, site_status: 'verified_none' });
+  assert.ok(verified.score > unverified.score);
+  assert.equal(unverified.factors.reduce((n, f) => n + f.points, 0), unverified.score);
+  assert.match(unverified.factors[0]!.label, /à vérifier/);
+  const stale = opportunityDetails({ ...base, site_status: 'none', updated_at: '2020-01-01T00:00:00Z' }, new Date('2026-06-01'));
+  assert.ok(stale.factors.some((f) => f.points < 0 && /plus d’un an/.test(f.label)));
+});
+
+test('listProspects : filtre par département (préfixe), coordonnées et source', () => {
+  const db = openDatabase(':memory:');
+  upsertProspects(db, [raw({ id: 'osm:node/1', phone: '0450', email: null })], 'plombier', '74010');
+  upsertProspects(db, [raw({ id: 'osm:node/2', phone: null, email: 'a@b.fr' })], 'plombier', '74081');
+  upsertProspects(db, [raw({ id: 'sirene:1', source: 'sirene', phone: null, email: null })], 'plombier', '73065');
+  assert.equal(listProspects(db, null, { cityPrefixes: ['74'], trade: 'plombier' }).total, 2);
+  assert.equal(listProspects(db, null, { cityPrefixes: ['74', '73'], trade: 'plombier' }).total, 3);
+  assert.equal(listProspects(db, null, { cityPrefixes: ['74'], contact: 'email' }).total, 1);
+  assert.equal(listProspects(db, null, { cityPrefixes: ['74', '73'], contact: 'any' }).total, 2);
+  assert.equal(listProspects(db, null, { cityPrefixes: ['74', '73'], source: 'sirene' }).total, 1);
+  assert.equal(listProspects(db, null, { cityPrefixes: ["74%' OR 1=1 --"] }).total, 0); // préfixe invalide ignoré
+  const locked = listProspects(db, null, { cityCode: '74010' }).items[0]!;
+  assert.equal(locked.lat, 45.9); // arrondi à 2 décimales (~1 km)
+  assert.equal(locked.approxPosition, true);
+});
+
+test('setSiteCheck : site trouvé audité, absence vérifiée, retour à la source', async () => {
+  const db = openDatabase(':memory:');
+  upsertProspects(db, [raw({ id: 'osm:node/1' })], 'plombier', '74010');
+  const u = makeUser(db);
+  unlockProspect(db, u, 'osm:node/1');
+  const fakeAudit = async () => ({ status: 'weak' as const, score: 40, issues: [{ code: 'no_https', label: 'Pas de HTTPS', weight: 20 }] });
+  const found = await setSiteCheck(db, u.id, 'osm:node/1', { kind: 'site_found', url: 'plomberie-test.fr' }, fakeAudit);
+  assert.equal(found!.site_status, 'weak');
+  assert.equal(found!.audit_score, 40);
+  assert.equal(found!.website, 'plomberie-test.fr');
+  const none = await setSiteCheck(db, u.id, 'osm:node/1', { kind: 'verified_none' }, fakeAudit);
+  assert.equal(none!.site_status, 'verified_none');
+  const reset = await setSiteCheck(db, u.id, 'osm:node/1', { kind: null }, fakeAudit);
+  assert.equal(reset!.site_status, 'none');
+  await assert.rejects(setSiteCheck(db, u.id, 'osm:node/1', { kind: 'site_found', url: '' }, fakeAudit));
+  assert.equal(await setSiteCheck(db, 999, 'osm:node/1', { kind: 'verified_none' }, fakeAudit), null); // pas débloqué par ce compte
+});
+
+test('rescoreIfNeeded recalcule une seule fois par version du barème', () => {
+  const db = openDatabase(':memory:');
+  upsertProspects(db, [raw({ id: 'osm:node/1' })], 'plombier', '74010');
+  db.prepare('UPDATE prospects SET opportunity = 1').run();
+  assert.equal(rescoreIfNeeded(db), 1);
+  assert.notEqual(db.prepare('SELECT opportunity FROM prospects').get()!.opportunity, 1);
+  assert.equal(rescoreIfNeeded(db), 0);
 });

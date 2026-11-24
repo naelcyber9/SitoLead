@@ -5,7 +5,16 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-export type SiteStatus = 'none' | 'social' | 'ok' | 'weak' | 'down' | 'unknown' | 'pending';
+/**
+ * none          : aucun site renseigné dans la source (ce n'est PAS une preuve d'absence)
+ * verified_none : aucun site trouvé après vérification par l'utilisateur
+ * social        : seulement une page réseau social / annuaire
+ * ok / weak     : site existant, correct / potentiellement obsolète (audit)
+ * down          : site renseigné mais inaccessible
+ * unknown       : non vérifié (source sans information sur le site, ou audit impossible)
+ * pending       : vérification en cours
+ */
+export type SiteStatus = 'none' | 'verified_none' | 'social' | 'ok' | 'weak' | 'down' | 'unknown' | 'pending';
 
 export interface AuditIssue {
   code: string;

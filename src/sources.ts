@@ -81,13 +81,21 @@ export async function communeByCode(code: string): Promise<Commune | null> {
 
 // --- OpenStreetMap ------------------------------------------------------------
 
-const OVERPASS = [
+// Instances Overpass publiques : gratuites mais partagées, à n'utiliser qu'avec modération
+// (politique d'usage : quelques milliers de requêtes / jour maximum, une à la fois).
+// En production, configurez votre propre instance via OVERPASS_URL (voir docs/DEPLOIEMENT.md).
+const PUBLIC_OVERPASS = [
   'https://overpass-api.de/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const OSM_BUDGET_MS = 30_000;
+export const overpassEndpoints = (): string[] => {
+  const own = (process.env.OVERPASS_URL ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return own.length ? own : PUBLIC_OVERPASS;
+};
+export const usingPublicOverpass = (): boolean => !process.env.OVERPASS_URL?.trim();
+/** Une requête par ville (tous les métiers) peut être lourde pour une grande ville. */
+const OSM_BUDGET_MS = 60_000;
 
 export interface OsmElement {
   type: string;
@@ -123,36 +131,77 @@ export function osmToProspect(el: OsmElement, cityName: string): RawProspect | n
   };
 }
 
-export async function fetchOsm(commune: Commune, trade: Trade): Promise<RawProspect[]> {
-  const [k, v] = trade.osm;
-  const query = `[out:json][timeout:25];area["ref:INSEE"="${commune.code}"]["boundary"="administrative"]->.a;nwr["${k}"="${v}"]["name"](area.a);out center tags 500;`;
-  // Les serveurs Overpass publics sont souvent saturés : on les interroge tous en même temps,
-  // le premier qui répond gagne et les autres requêtes sont annulées.
-  const stop = new AbortController();
-  const deadline = AbortSignal.timeout(OSM_BUDGET_MS);
-  const signal = AbortSignal.any([stop.signal, deadline]);
-  try {
-    const data = await Promise.any(
-      OVERPASS.map(async (endpoint) => {
+/** Métier d'un élément OpenStreetMap d'après ses tags (premier métier qui correspond). */
+export function osmTrade(tags: Record<string, string> | undefined, trades: Trade[]): Trade | undefined {
+  if (!tags) return undefined;
+  return trades.find((t) => tags[t.osm[0]] === t.osm[1]);
+}
+
+/**
+ * Tous les métiers d'une commune en UNE requête Overpass (au lieu d'une par métier) :
+ * les serveurs publics étant saturés, chaque requête évitée compte.
+ */
+export async function fetchOsmCity(commune: Commune, trades: Trade[]): Promise<Map<string, RawProspect[]>> {
+  // Regroupe les valeurs par clé : craft~"^(plumber|electrician|…)$", shop~"^(bakery|…)$"…
+  const byKey = new Map<string, string[]>();
+  for (const t of trades) byKey.set(t.osm[0], [...(byKey.get(t.osm[0]) ?? []), t.osm[1]]);
+  const selectors = [...byKey].map(([k, vs]) => `nwr["${k}"~"^(${vs.join('|')})$"]["name"](area.a);`).join('');
+  const query = `[out:json][timeout:${Math.round(OSM_BUDGET_MS / 1000)}];area["ref:INSEE"="${commune.code}"]["boundary"="administrative"]->.a;(${selectors});out center tags;`;
+  const elements = await overpass(query);
+  const out = new Map<string, RawProspect[]>(trades.map((t) => [t.slug, []]));
+  for (const el of elements) {
+    const trade = osmTrade(el.tags, trades);
+    const p = trade ? osmToProspect(el, commune.nom) : null;
+    if (trade && p) out.get(trade.slug)!.push(p);
+  }
+  return out;
+}
+
+// Une seule requête Overpass à la fois pour tout le serveur : les instances publiques
+// limitent le nombre de requêtes simultanées par adresse IP, et c'est la règle de politesse.
+let overpassChain: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  const run = overpassChain.then(fn, fn);
+  overpassChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Interroge les instances l'une après l'autre (bascule si la première est saturée), dans un
+ * budget de temps global. Jamais plusieurs instances en parallèle : ce serait multiplier la
+ * charge sur des serveurs publics partagés.
+ */
+function overpass(query: string): Promise<OsmElement[]> {
+  return oneAtATime(async () => {
+    const deadline = AbortSignal.timeout(OSM_BUDGET_MS);
+    let last = 'OpenStreetMap indisponible';
+    for (const endpoint of overpassEndpoints()) {
+      if (deadline.aborted) break;
+      try {
         const res = await fetch(endpoint, {
           method: 'POST',
           body: new URLSearchParams({ data: query }),
-          signal,
+          signal: deadline,
           headers: { 'user-agent': UA, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
         });
-        if (!res.ok) throw new Error(`${new URL(endpoint).hostname} a répondu ${res.status}`);
+        if (!res.ok) {
+          await res.body?.cancel();
+          throw new Error(`${new URL(endpoint).hostname} a répondu ${res.status}`);
+        }
         const body = (await res.json()) as { elements?: OsmElement[]; remark?: string };
         // Overpass renvoie 200 avec une « remark » quand la requête a expiré côté serveur.
         if (!body.elements || (body.remark && /timed out|out of memory/i.test(body.remark))) throw new Error('réponse incomplète');
         return body.elements;
-      }),
+      } catch (e) {
+        last = (e as Error).message;
+      }
+    }
+    throw new Error(
+      deadline.aborted || /429|50[234]/.test(last)
+        ? 'OpenStreetMap ne répond pas (serveurs saturés), nouvel essai automatique plus tard'
+        : `OpenStreetMap indisponible (${last})`,
     );
-    return data.map((e) => osmToProspect(e, commune.nom)).filter((p): p is RawProspect => p !== null);
-  } catch {
-    throw new Error(deadline.aborted ? 'OpenStreetMap ne répond pas (serveurs saturés), réessayez plus tard' : 'OpenStreetMap indisponible');
-  } finally {
-    stop.abort();
-  }
+  });
 }
 
 // --- SIRENE : entreprises récentes ---------------------------------------------
@@ -216,14 +265,27 @@ export function prettyName(s: string): string {
     .join(' ');
 }
 
+const range = (prefix: number, from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => String(prefix * 100 + from + i));
+
+/** Paris, Lyon et Marseille sont enregistrées par arrondissement dans SIRENE, pas sous leur code de commune. */
+const ARRONDISSEMENTS: Record<string, string[]> = {
+  '75056': range(751, 1, 20), // 75101 … 75120
+  '69123': range(693, 81, 89), // 69381 … 69389
+  '13055': range(132, 1, 16), // 13201 … 13216
+};
+
+/** Codes INSEE à interroger dans SIRENE pour une commune (ses arrondissements le cas échéant). */
+export const sireneCommuneCodes = (code: string): string[] => ARRONDISSEMENTS[code] ?? [code];
+
 export function sireneToProspects(results: SireneResult[], commune: Commune, naf: string, maxAgeMonths: number, now = new Date()): RawProspect[] {
   const limit = new Date(now);
   limit.setMonth(limit.getMonth() - maxAgeMonths);
+  const codes = new Set(sireneCommuneCodes(commune.code));
   const out: RawProspect[] = [];
   for (const r of results) {
     if (sireneBlocked(r)) continue;
     for (const e of r.matching_etablissements ?? []) {
-      if (e.commune !== commune.code || e.etat_administratif !== 'A' || e.activite_principale !== naf) continue;
+      if (!codes.has(e.commune) || e.etat_administratif !== 'A' || e.activite_principale !== naf) continue;
       if (!e.date_creation || new Date(e.date_creation) < limit) continue;
       if (sireneBlocked(r, e)) continue;
       const name = e.liste_enseignes?.[0] || e.nom_commercial || r.nom_complet;
@@ -261,19 +323,61 @@ export function sireneOptOuts(results: SireneResult[]): string[] {
   return [...out];
 }
 
-export async function fetchSirene(commune: Commune, trade: Trade, maxAgeMonths = 24): Promise<{ prospects: RawProspect[]; optOuts: string[] }> {
-  const prospects: RawProspect[] = [];
-  const optOuts: string[] = [];
+// L'API annonce 7 requêtes / seconde par adresse IP mais renvoie des 429 bien avant :
+// on espace chaque appel d'au moins 250 ms (4 / s) pour tout le serveur, quelle que soit
+// la recherche qui le demande, et on retente les refus passagers.
+const SIRENE_GAP_MS = 250;
+// Deux files : les recherches des utilisateurs passent avant le préchargement en tâche de fond.
+const sireneQueues = { user: [] as (() => void)[], background: [] as (() => void)[] };
+let sireneLast = 0;
+let sireneTicking = false;
+function sireneTick(): void {
+  if (sireneTicking) return;
+  const next = sireneQueues.user.shift() ?? sireneQueues.background.shift();
+  if (!next) return;
+  sireneTicking = true;
+  setTimeout(() => {
+    sireneLast = Date.now();
+    sireneTicking = false;
+    next();
+    sireneTick();
+  }, Math.max(0, sireneLast + SIRENE_GAP_MS - Date.now()));
+}
+function sireneSlot(background: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    sireneQueues[background ? 'background' : 'user'].push(resolve);
+    sireneTick();
+  });
+}
+
+const SIRENE_MAX_PAGES = 40;
+
+export async function fetchSirene(
+  commune: Commune,
+  trade: Trade,
+  opts: { maxAgeMonths?: number; background?: boolean } = {},
+): Promise<{ prospects: RawProspect[]; optOuts: string[] }> {
+  const maxAgeMonths = opts.maxAgeMonths ?? 24;
+  const base =
+    `https://recherche-entreprises.api.gouv.fr/search?activite_principale=${encodeURIComponent(trade.naf)}` +
+    `&code_commune=${sireneCommuneCodes(commune.code).join(',')}&etat_administratif=A&per_page=25&page=`;
+  const page = async (n: number) => {
+    // Refus pour trop de requêtes (429) ou coupure réseau : jusqu'à 3 nouvelles tentatives, de plus en plus espacées.
+    for (let attempt = 0; ; attempt++) {
+      await sireneSlot(Boolean(opts.background));
+      try {
+        return await getJson<{ results: SireneResult[]; total_pages: number }>(base + n, {}, 15_000);
+      } catch (e) {
+        const transient = /429|50[234]|fetch failed|timeout/i.test((e as Error).message);
+        if (!transient || attempt >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
+  };
   // L'API ne filtre pas par date de création : on parcourt toutes les pages (plafonnées).
-  for (let page = 1; page <= 12; page++) {
-    const url =
-      `https://recherche-entreprises.api.gouv.fr/search?activite_principale=${encodeURIComponent(trade.naf)}` +
-      `&code_commune=${commune.code}&etat_administratif=A&per_page=25&page=${page}`;
-    const data = await getJson<{ results: SireneResult[]; total_pages: number }>(url, {}, 15_000);
-    prospects.push(...sireneToProspects(data.results, commune, trade.naf, maxAgeMonths));
-    optOuts.push(...sireneOptOuts(data.results));
-    if (page >= data.total_pages) break;
-    await new Promise((r) => setTimeout(r, 300)); // l'API limite à 7 requêtes / seconde
-  }
-  return { prospects, optOuts };
+  // La première donne le nombre de pages, les suivantes partent en parallèle (au rythme autorisé).
+  const first = await page(1);
+  const rest = await Promise.all(Array.from({ length: Math.min(first.total_pages, SIRENE_MAX_PAGES) - 1 }, (_, i) => page(i + 2)));
+  const results = [first, ...rest].flatMap((d) => d.results);
+  return { prospects: sireneToProspects(results, commune, trade.naf, maxAgeMonths), optOuts: sireneOptOuts(results) };
 }

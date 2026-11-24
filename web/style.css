@@ -311,3 +311,29 @@ dialog::backdrop { background: rgb(20 35 31 / 55%); }
   html { scroll-behavior: auto; }
   .spinner { animation-duration: 2s; }
 }
+
+/* --- Recherche par zone, carte, favoris (phase 1) ------------------------------------ */
+.searchbar { display: flex; flex-wrap: wrap; }
+.searchbar .combo { flex: 2 1 260px; }
+.searchbar #radius-field { flex: 0 1 150px; }
+.searchbar .field:has(#trade-select) { flex: 1 1 180px; }
+.searchbar > .btn { flex: 0 0 auto; }
+.filters label { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; }
+.results-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
+#coverage { font-weight: 400; background: var(--surface-2); color: inherit; }
+.map { height: 380px; border-radius: var(--radius); border: 1px solid var(--line); margin-bottom: 8px; z-index: 0; }
+.card.is-active { outline: 3px solid var(--brand); outline-offset: 2px; }
+.fav-btn { background: none; border: 0; font-size: 1.1rem; line-height: 1; cursor: pointer; color: var(--warn); padding: 2px 4px; vertical-align: middle; }
+.fav-btn[aria-pressed="false"] { color: var(--muted); }
+.fav-btn:focus-visible { outline: 2px solid var(--brand); border-radius: 4px; }
+.score-details { margin: 12px 0; }
+.score-details summary { cursor: pointer; font-weight: 600; }
+.factors { margin: 8px 0 0; padding-left: 18px; font-size: .92rem; }
+.factors strong { display: inline-block; min-width: 2.6em; }
+#site-check-form { align-items: center; flex-wrap: wrap; gap: 8px; }
+#site-check-form input { flex: 1 1 200px; min-height: 36px; padding: 6px 10px; border: 1.5px solid var(--line); border-radius: var(--radius-sm); font: inherit; }
+.center { text-align: center; }
+@media (max-width: 640px) {
+  .map { height: 280px; }
+  .searchbar > * { flex-basis: 100% !important; }
+}

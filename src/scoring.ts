@@ -24,37 +24,59 @@ export function monthsSince(date: string | null, now = new Date()): number | nul
   return (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
 }
 
-export function opportunityScore(p: Pick<ProspectLike, 'site_status' | 'audit_score' | 'phone' | 'email' | 'created_on'>, now = new Date()): number {
-  let s: number;
-  switch (p.site_status) {
-    case 'none': s = 90; break;
-    case 'social': s = 86; break;
-    case 'down': s = 88; break;
-    case 'unknown': s = 60; break;
-    case 'pending': s = 50; break;
-    case 'weak': s = Math.round(55 + ((69 - (p.audit_score ?? 69)) * 30) / 69); break;
-    default: s = Math.round(Math.max(5, 50 - ((p.audit_score ?? 70) - 70) * 1.5));
-  }
-  if (p.phone) s += 4;
-  if (p.email) s += 2;
-  // Un prospect sans aucun moyen de contact demande une recherche en plus : il passe après.
-  if (!p.phone && !p.email) s -= 6;
-  const age = monthsSince(p.created_on, now);
-  if (age !== null && age <= 18) s += 8;
-  return Math.max(0, Math.min(100, s));
+export interface ScoreFactor {
+  label: string;
+  points: number;
 }
+
+type ScoreInput = Pick<ProspectLike, 'site_status' | 'audit_score' | 'phone' | 'email' | 'created_on'> & { updated_at?: string | null };
+
+/**
+ * Score d'opportunité expliqué : chaque point vient d'une donnée réellement disponible
+ * (état du site, contacts, date de création, fraîcheur), jamais d'une estimation inventée.
+ */
+export function opportunityDetails(p: ScoreInput, now = new Date()): { score: number; factors: ScoreFactor[] } {
+  const factors: ScoreFactor[] = [];
+  const add = (label: string, points: number) => factors.push({ label, points });
+  switch (p.site_status) {
+    case 'verified_none': add('Aucun site trouvé après vérification', 90); break;
+    case 'down': add('Site renseigné mais inaccessible', 85); break;
+    case 'social': add('Seulement une page réseau social ou annuaire', 82); break;
+    case 'none': add('Aucun site renseigné dans la source (à vérifier)', 75); break;
+    case 'unknown': add('Présence en ligne non vérifiée', 55); break;
+    case 'pending': add('Vérification du site en cours', 50); break;
+    case 'weak': add(`Site potentiellement obsolète (audit ${p.audit_score ?? '?'}/100)`, Math.round(55 + ((69 - (p.audit_score ?? 69)) * 30) / 69)); break;
+    default: add(`Site existant et correct (audit ${p.audit_score ?? '?'}/100)`, Math.round(Math.max(5, 50 - ((p.audit_score ?? 70) - 70) * 1.5)));
+  }
+  if (p.phone) add('Téléphone professionnel disponible', 6);
+  if (p.email) add('Email professionnel disponible', 3);
+  // Un prospect sans aucun moyen de contact demande une recherche en plus : il passe après.
+  if (!p.phone && !p.email) add('Aucune coordonnée disponible', -8);
+  const age = monthsSince(p.created_on, now);
+  if (age !== null && age <= 18) add(`Entreprise créée il y a ${Math.max(0, age)} mois`, 8);
+  const stale = monthsSince(p.updated_at ?? null, now);
+  if (stale !== null && stale >= 12) add('Données de plus d’un an', -5);
+  const total = factors.reduce((s, f) => s + f.points, 0);
+  return { score: Math.max(0, Math.min(100, total)), factors };
+}
+
+export const opportunityScore = (p: ScoreInput, now = new Date()): number => opportunityDetails(p, now).score;
 
 export function statusLabel(status: SiteStatus): string {
   return {
-    none: 'Aucun site',
-    social: 'Seulement une page réseau social',
-    down: 'Site hors service',
-    weak: 'Site à refaire',
-    ok: 'Site correct',
-    unknown: 'Aucun site référencé',
-    pending: 'Audit en cours',
+    none: 'Site non renseigné',
+    verified_none: 'Aucun site trouvé après vérification',
+    social: 'Seulement réseau social ou annuaire',
+    down: 'Site inaccessible',
+    weak: 'Site potentiellement obsolète',
+    ok: 'Site existant',
+    unknown: 'Non vérifié',
+    pending: 'Vérification en cours',
   }[status];
 }
+
+/** Statuts considérés comme « sans vrai site » pour les filtres et les statistiques. */
+export const NO_SITE_STATUSES: SiteStatus[] = ['none', 'verified_none', 'social', 'down', 'unknown'];
 
 // --- Messages de prospection -------------------------------------------------
 
@@ -86,12 +108,19 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
   let hook: string;
   let subject: string;
   switch (p.site_status) {
-    case 'none':
-    case 'unknown':
+    case 'verified_none':
       subject = `${p.name} : vos futurs clients vous cherchent sur Google`;
       hook = recent
-        ? `Félicitations pour le lancement de ${p.name}${where}. En cherchant « ${tradeLabel}${where} » sur Google, je n’ai trouvé aucun site à votre nom : les clients qui vous cherchent tombent donc sur vos concurrents.`
-        : `En cherchant « ${tradeLabel}${where} » sur Google, je n’ai trouvé aucun site pour ${p.name} : les clients qui vous cherchent tombent donc sur vos concurrents.`;
+        ? `Félicitations pour le lancement de ${p.name}${where}. En cherchant « ${tradeLabel}${where} » sur Google, je n’ai pas trouvé de site à votre nom : les clients qui vous cherchent risquent donc de tomber sur vos concurrents.`
+        : `En cherchant « ${tradeLabel}${where} » sur Google, je n’ai pas trouvé de site pour ${p.name} : les clients qui vous cherchent risquent donc de tomber sur vos concurrents.`;
+      break;
+    case 'none':
+    case 'unknown':
+      // Absence non vérifiée : formulation prudente, on n'affirme pas qu'il n'y a pas de site.
+      subject = `${p.name} : votre présence sur internet`;
+      hook = recent
+        ? `Félicitations pour le lancement de ${p.name}${where}. Sauf erreur de ma part, vous n’avez pas encore de site internet, alors que vos futurs clients cherchent « ${tradeLabel}${where} » sur Google.`
+        : `Sauf erreur de ma part, ${p.name} n’a pas de site internet, alors que vos clients cherchent « ${tradeLabel}${where} » sur Google.`;
       break;
     case 'social':
       subject = `${p.name} : passer de Facebook à un vrai site`;
@@ -127,7 +156,7 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
     '',
     p.site_status === 'weak' || p.site_status === 'down'
       ? `Je suis tombé sur votre site, et j’ai relevé ${Math.max(1, top.length)} problèmes qui font fuir les clients, par exemple : ${p.audit_issues[0]?.label.toLowerCase() ?? 'il ne s’affiche pas bien'}.`
-      : `En cherchant « ${tradeLabel}${where} » sur Google, je ne vous ai pas trouvé : ce sont vos concurrents qui récupèrent ces appels.`,
+      : `Sauf erreur de ma part, vous n’avez pas de site internet : quand on cherche « ${tradeLabel}${where} » sur Google, ce sont surtout vos concurrents qui apparaissent.`,
     '',
     `Mon métier, c’est justement d’aider les ${trade?.plural ?? 'professionnels'} à ${benefit}.`,
     'Est-ce que je peux vous montrer une maquette de votre futur site, sans engagement ? Quel moment vous arrange ?',
@@ -137,7 +166,7 @@ export function buildPitch(p: ProspectLike, sender: Sender, now = new Date()): P
   ].join('\n');
 
   const sms = `Bonjour, ${who}${sender.agency_name && sender.full_name ? ` (${sender.agency_name})` : ''}. ${
-    p.site_status === 'weak' || p.site_status === 'down' ? `J’ai repéré des problèmes sur le site de ${p.name}` : `${p.name} n’apparaît pas sur Google`
+    p.site_status === 'weak' || p.site_status === 'down' ? `J’ai repéré des problèmes sur le site de ${p.name}` : `Sauf erreur, ${p.name} n’a pas encore de site internet`
   } : je vous propose une maquette gratuite. Intéressé(e) ? STOP pour ne plus être contacté.`;
 
   return { subject, email, call, sms };

@@ -7,20 +7,27 @@ import { fileURLToPath } from 'node:url';
 import {
   EMAIL_RE, RateLimiter, createSession, destroySession, hashPassword, purgeExpiredSessions, userBySession, validatePassword, verifyPassword, SESSION_DAYS,
 } from './auth.ts';
+import { createHash } from 'node:crypto';
 import {
-  PLANS, createCheckout, createPortal, effectivePlan, handleStripeEvent, quotaFor, stripeConfigured, verifyStripeSignature, type UserRow,
+  PLANS, createCheckout, createPortal, effectivePlan, handleStripeEvent, quotaFor, stripeConfigured, useSearch, verifyStripeSignature, type UserRow,
 } from './billing.ts';
 import { CITIES, TRADES, cityByCode, cityBySlug, tradeBySlug } from './catalog.ts';
 import { nowIso, openDatabase, type DB } from './db.ts';
 import {
-  LEAD_STATUSES, cityStats, getLead, isSearching, leadsCsv, listLeads, listProspects, refreshSearch, scheduleAudits, searchInfo, unlockProspect, updateLead,
+  LEAD_STATUSES, SQL_NO_SITE, cityStats, getLead, isSearching, leadsCsv, listLeads, listProspects, refreshSearch, rescoreIfNeeded, scheduleAudits,
+  searchInfo, setFavorite, setSiteCheck, shouldRetry, unlockProspect, updateLead, warmCache,
 } from './prospects.ts';
+import { buildPitch, statusLabel } from './scoring.ts';
 
 /** Temps maximal d'attente des sources avant de renvoyer des résultats partiels. */
 const SEARCH_WAIT_MS = 3000;
-import { buildPitch } from './scoring.ts';
+/** Comptes gratuits créés par adresse IP sur 24 h (au-delà : refus, pour limiter les abus du quota offert). */
+const SIGNUPS_PER_IP_PER_DAY = 3;
+/** Fournisseurs d'adresses jetables les plus courants : refusés à l'inscription. */
+const DISPOSABLE = /@(yopmail\.(com|fr|net)|mailinator\.com|guerrillamail\.(com|net|org)|10minutemail\.(com|net)|temp-mail\.org|trashmail\.(com|fr)|jetable\.org|getnada\.com|sharklasers\.com|throwawaymail\.com|dispostable\.com|maildrop\.cc|tempmail\.(com|net)|mohmal\.com|emailondeck\.com|fakeinbox\.com)$/i;
 import * as seo from './seo.ts';
 import { communeByCode, searchCommunes, type Commune } from './sources.ts';
+import { parseZone, planCollection, resolveZone, searchAreas, zoneCoverage } from './zones.ts';
 
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
 const MIME: Record<string, string> = {
@@ -53,13 +60,28 @@ class HttpError extends Error {
   }
 }
 
+// Fonds de carte : les tuiles OpenStreetMap standard conviennent au développement et à un faible
+// trafic (politique d'usage des tuiles OSM, attribution obligatoire). En production, utilisez un
+// fournisseur de tuiles (MAP_TILE_URL) : voir docs/DEPLOIEMENT.md.
+export const MAP = {
+  tileUrl: process.env.MAP_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: process.env.MAP_ATTRIBUTION || '© contributeurs OpenStreetMap',
+};
+const tileOrigin = (() => {
+  try {
+    return new URL(MAP.tileUrl.replace(/\{[a-z]\}/g, 'a')).origin;
+  } catch {
+    return '';
+  }
+})();
+
 const SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-frame-options': 'DENY',
   'permissions-policy': 'camera=(), microphone=(), geolocation=()',
   'content-security-policy':
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com",
+    `default-src 'self'; img-src 'self' data: ${tileOrigin}; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com`,
 };
 
 function send(res: ServerResponse, status: number, body: string | Buffer, type: string, extra: Record<string, string> = {}): void {
@@ -235,7 +257,12 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
           trades: TRADES.map((t) => ({ slug: t.slug, label: t.label, plural: t.plural })),
           cities: CITIES.map((c) => ({ code: c.code, name: c.name, dep: c.dep })),
           leadStatuses: LEAD_STATUSES,
+          siteStatuses: Object.fromEntries(
+            (['none', 'verified_none', 'social', 'ok', 'weak', 'down', 'unknown', 'pending'] as const).map((s) => [s, statusLabel(s)]),
+          ),
           billing: stripeConfigured(),
+          map: MAP,
+          radii: [5, 10, 20, 30, 50],
         });
 
       case 'POST /api/signup':
@@ -250,9 +277,17 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
           const err = validatePassword(password);
           if (err) throw new HttpError(400, err);
           if (body.terms !== true) throw new HttpError(400, 'Acceptez les conditions générales pour continuer');
+          if (DISPOSABLE.test(email)) throw new HttpError(400, 'Les adresses email jetables ne sont pas acceptées : utilisez votre adresse professionnelle');
           const exists = db.prepare('SELECT 1 FROM users WHERE email = ?').get(email);
           if (exists) throw new HttpError(409, 'Un compte existe déjà avec cet email : connectez-vous');
+          // Limite des comptes gratuits créés en série depuis la même adresse IP (stockée hachée).
+          const ipHash = createHash('sha256').update(`${process.env.IP_SALT ?? 'sitolead'}|${clientIp(req)}`).digest('hex');
+          const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+          const recent = Number((db.prepare('SELECT COUNT(*) AS n FROM signups WHERE ip_hash = ? AND created_at > ?').get(ipHash, dayAgo) as { n: number }).n);
+          if (recent >= SIGNUPS_PER_IP_PER_DAY) throw new HttpError(429, 'Trop de comptes créés depuis cette connexion aujourd’hui. Réessayez demain ou contactez-nous.');
           const r = db.prepare('INSERT INTO users (email, pass_hash, created_at) VALUES (?, ?, ?)').run(email, await hashPassword(String(password)), nowIso());
+          db.prepare('INSERT INTO signups (ip_hash, created_at) VALUES (?, ?)').run(ipHash, nowIso());
+          db.prepare('DELETE FROM signups WHERE created_at < ?').run(new Date(Date.now() - 7 * 86_400_000).toISOString());
           userId = Number(r.lastInsertRowid);
         } else {
           const row = db.prepare('SELECT id, pass_hash FROM users WHERE email = ?').get(email) as { id: number; pass_hash: string } | undefined;
@@ -302,24 +337,80 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         if (!communeLimiter.allow(clientIp(req))) throw new HttpError(429, 'Trop de requêtes');
         const q = url.searchParams.get('q') ?? '';
         const local = CITIES.filter((c) => c.name.toLowerCase().startsWith(q.trim().toLowerCase())).map((c) => ({ code: c.code, nom: c.name, departement: c.dep }));
-        if (!live) return json(res, 200, { items: local.slice(0, 8) });
-        try {
-          const items = await searchCommunes(q);
-          return json(res, 200, { items: items.map((c) => ({ code: c.code, nom: c.nom, departement: c.departement, codesPostaux: c.codesPostaux.slice(0, 3) })) });
-        } catch {
-          return json(res, 200, { items: local.slice(0, 8), degraded: true });
-        }
+        if (!live) return json(res, 200, { items: local.slice(0, 8).map((c) => ({ type: 'commune', ...c })) });
+        // Communes (geo.api.gouv.fr), puis départements et régions correspondants.
+        const [communesRes, areasRes] = await Promise.allSettled([searchCommunes(q, 6), searchAreas(q)]);
+        const items = [
+          ...(communesRes.status === 'fulfilled'
+            ? communesRes.value.map((c) => ({ type: 'commune', code: c.code, nom: c.nom, departement: c.departement, codesPostaux: c.codesPostaux.slice(0, 3) }))
+            : local.slice(0, 6).map((c) => ({ type: 'commune', ...c }))),
+          ...(areasRes.status === 'fulfilled' ? areasRes.value : []),
+        ];
+        return json(res, 200, { items, degraded: communesRes.status === 'rejected' || undefined });
       }
 
       case 'GET /api/prospects': {
         const u = requireUser(req);
         if (!searchLimiter.allow(`u${u.id}`)) throw new HttpError(429, 'Trop de recherches, patientez une minute');
-        const commune = await resolveCommune(url.searchParams.get('city') ?? '');
         const trade = url.searchParams.get('trade') ?? '';
         if (!tradeBySlug(trade)) throw new HttpError(400, 'Métier inconnu');
+        const zoneParam = url.searchParams.get('zone') ?? `commune:${url.searchParams.get('city') ?? ''}`;
+        const z = parseZone(zoneParam);
+        if (!z) throw new HttpError(400, 'Zone de recherche invalide');
+        // Quota de recherches du jour : seule une nouvelle zone × métier consomme (pas la pagination).
+        const usage = useSearch(db, u, `${zoneParam}|${trade}`);
+        if (!usage.allowed) {
+          throw new HttpError(
+            429,
+            `Vous avez atteint vos ${usage.limit} recherches du jour. Les recherches déjà faites aujourd’hui restent accessibles ; le compteur repart demain.`,
+            'search_quota',
+          );
+        }
         const status = url.searchParams.get('status');
-        const minScore = Number(url.searchParams.get('min') ?? 0) || 0;
-        const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+        const contact = url.searchParams.get('contact');
+        const source = url.searchParams.get('source');
+        const filters = {
+          trade,
+          status: status === 'nosite' || status === 'weak' || status === 'recent' ? status : ('all' as const),
+          minScore: Number(url.searchParams.get('min') ?? 0) || 0,
+          contact: contact === 'phone' || contact === 'email' || contact === 'any' ? contact : undefined,
+          source: source === 'osm' || source === 'sirene' ? source : undefined,
+          favoritesOnly: url.searchParams.get('fav') === '1',
+          limit: 50,
+          offset: Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0),
+        } as const;
+        const searchUsage = { used: usage.used, limit: usage.limit };
+
+        if (z.kind !== 'commune') {
+          // Département, région ou rayon : affichage depuis la base, collecte progressive.
+          if (!live) throw new HttpError(503, 'La recherche par zone nécessite les sources en ligne');
+          let zone;
+          try {
+            zone = await resolveZone({ kind: z.kind, code: z.code, km: z.km });
+          } catch {
+            throw new HttpError(502, 'Le référentiel géographique (geo.api.gouv.fr) ne répond pas, réessayez dans un instant');
+          }
+          const plan = planCollection(db, zone, trade);
+          for (const c of plan.collectNow) void refreshSearch(db, c, trade, { live }).catch(() => {});
+          const pending = plan.collectNow.length > 0 || zone.communes.some((c) => isSearching(c.code, trade));
+          const list = listProspects(db, u.id, { ...filters, cityPrefixes: zone.prefixes, cityCode: zone.codes });
+          const coverage = zoneCoverage(db, zone, trade);
+          const inQueue = new Set(
+            (db.prepare('SELECT city_code FROM collect_queue WHERE trade = ?').all(trade) as { city_code: string }[]).map((r) => r.city_code),
+          );
+          const queued = zone.communes.filter((c) => inQueue.has(c.code)).length;
+          return json(res, 200, {
+            zone: { kind: zone.kind, key: zone.key, label: zone.label, center: zone.center ?? null },
+            commune: { code: zone.key, nom: zone.label },
+            search: { fetched_at: null, found: list.total, errors: [], fresh: true, pending },
+            coverage: { ...coverage, queued },
+            quota: quotaFor(db, u),
+            searchUsage,
+            ...list,
+          });
+        }
+
+        const commune = await resolveCommune(z.code);
         let info = searchInfo(db, commune.code, trade);
         if (live) {
           if (!info || (info.errors.length && info.found === 0)) {
@@ -327,20 +418,29 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
             // est déjà enregistré et l'écran redemande tant que `pending` est vrai.
             const job = refreshSearch(db, commune, trade, { live, force: Boolean(info) });
             job.catch(() => {});
-            const done = await Promise.race([job.catch(() => null), new Promise<null>((r) => setTimeout(r, SEARCH_WAIT_MS, null))]);
+            // Fiches déjà en base (commune préchargée, ou chargée par la recherche d'un autre
+            // métier) : on les affiche tout de suite, le reste arrive pendant que l'écran redemande.
+            const known = Number(
+              (db.prepare('SELECT COUNT(*) AS n FROM prospects WHERE city_code = ? AND trade = ?').get(commune.code, trade) as { n: number }).n,
+            );
+            const done = known > 0 ? null : await Promise.race([job.catch(() => null), new Promise<null>((r) => setTimeout(r, SEARCH_WAIT_MS, null))]);
             info = done ?? searchInfo(db, commune.code, trade);
-          } else if (!info.fresh) void refreshSearch(db, commune, trade, { live }).catch(() => {});
+          } else if (!info.fresh || shouldRetry(info)) {
+            // Résultats affichés tout de suite ; une recherche périmée ou incomplète se complète en fond.
+            void refreshSearch(db, commune, trade, { live, force: true }).catch(() => {});
+          }
           if (isSearching(commune.code, trade)) info = { ...(info ?? { fetched_at: null, found: 0, errors: [], fresh: false }), pending: true };
         }
-        const list = listProspects(db, u.id, {
-          cityCode: commune.code,
-          trade,
-          status: status === 'nosite' || status === 'weak' || status === 'recent' ? status : 'all',
-          minScore,
-          limit: 50,
-          offset,
+        const list = listProspects(db, u.id, { ...filters, cityCode: commune.code });
+        return json(res, 200, {
+          zone: { kind: 'commune', key: `commune:${commune.code}`, label: commune.nom, center: null },
+          commune: { code: commune.code, nom: commune.nom },
+          search: info,
+          coverage: null,
+          quota: quotaFor(db, u),
+          searchUsage,
+          ...list,
         });
-        return json(res, 200, { commune: { code: commune.code, nom: commune.nom }, search: info, quota: quotaFor(db, u), ...list });
       }
 
       case 'GET /api/leads': {
@@ -394,6 +494,25 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       }
       return json(res, 200, { prospect: r.prospect, already: r.already, quota: quotaFor(db, u) });
     }
+    if (parts[1] === 'prospects' && parts.length === 4 && parts[3] === 'favorite' && method === 'PUT') {
+      const u = requireUser(req);
+      const on = (await readJson(req)).on === true;
+      if (!setFavorite(db, u.id, parts[2]!, on)) throw new HttpError(404, 'Entreprise introuvable');
+      return json(res, 200, { favorite: on });
+    }
+    if (parts[1] === 'leads' && parts.length === 4 && parts[3] === 'site-check' && method === 'PUT') {
+      const u = requireUser(req);
+      const b = await readJson(req);
+      const kind = b.kind === 'verified_none' || b.kind === 'site_found' ? b.kind : null;
+      let lead;
+      try {
+        lead = await setSiteCheck(db, u.id, parts[2]!, { kind, url: typeof b.url === 'string' ? b.url : null });
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+      if (!lead) throw new HttpError(404, 'Prospect non débloqué');
+      return json(res, 200, { lead });
+    }
     if (parts[1] === 'leads' && parts.length >= 3) {
       const u = requireUser(req);
       const id = parts[2]!;
@@ -425,7 +544,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
   async function page(req: IncomingMessage, res: ServerResponse, parts: string[]): Promise<void> {
     const [a, b, c] = parts;
     if (parts.length === 0) {
-      const t = db.prepare(`SELECT COUNT(*) AS n, SUM(site_status IN ('none','social','down','unknown')) AS nosite FROM prospects`).get() as {
+      const t = db.prepare(`SELECT COUNT(*) AS n, SUM(site_status IN ${SQL_NO_SITE}) AS nosite FROM prospects`).get() as {
         n: number;
         nosite: number | null;
       };
@@ -504,13 +623,26 @@ export function startServer(opts: Partial<AppOptions> & { port?: number; host?: 
   const server = createServer((req, res) => void handler(req, res));
   server.requestTimeout = 90_000;
   purgeExpiredSessions(db);
+  const rescored = rescoreIfNeeded(db);
+  if (rescored) console.log(`Scores d’opportunité recalculés (nouveau barème) : ${rescored} entreprises.`);
   if (live) scheduleAudits(db);
   const timer = setInterval(() => {
     purgeExpiredSessions(db);
     if (live) scheduleAudits(db);
   }, 3_600_000);
   timer.unref();
-  server.on('close', () => clearInterval(timer));
+  // Préchargement des grandes villes : au démarrage puis toutes les 15 minutes (ce qui est
+  // à jour est sauté, ce qui a échoué est retenté). Désactivable avec WARM_CACHE=0.
+  const warm = live && process.env.WARM_CACHE !== '0';
+  const warmTimer = setInterval(() => warm && void warmCache(db).catch(() => {}), 15 * 60_000);
+  warmTimer.unref();
+  const warmStart = setTimeout(() => warm && void warmCache(db).catch(() => {}), 5000);
+  warmStart.unref();
+  server.on('close', () => {
+    clearInterval(timer);
+    clearInterval(warmTimer);
+    clearTimeout(warmStart);
+  });
   server.listen(opts.port ?? Number(process.env.PORT ?? 3000), opts.host ?? process.env.HOST ?? '127.0.0.1');
   return server;
 }

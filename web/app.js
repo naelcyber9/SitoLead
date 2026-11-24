@@ -25,7 +25,8 @@
     config: null,
     user: null,
     view: null,
-    search: { city: null, trade: '', status: 'all', min: 0, offset: 0, items: [], total: 0, polls: 0 },
+    // zone : { type: 'commune' | 'departement' | 'region', code, nom } ; radius : km autour d'une commune (0 = commune seule).
+    search: { zone: null, radius: 0, trade: '', status: 'all', min: 0, contact: '', source: '', fav: false, offset: 0, items: [], total: 0, polls: 0 },
     leads: [],
     leadFilter: '',
   };
@@ -159,7 +160,7 @@
           form.reset();
           go(HASH_TO_VIEW[location.hash.slice(1)] ?? 'search');
           if (id === 'signup') toast('Compte créé : vos 5 entreprises offertes vous attendent');
-          if (state.view === 'search' && state.search.city) runSearch();
+          if (state.view === 'search' && state.search.zone) runSearch();
         } catch (e) {
           err.textContent = e.message;
         } finally {
@@ -176,40 +177,84 @@
     sel.innerHTML = state.config.trades.map((t) => `<option value="${h(t.slug)}">${h(t.label)}</option>`).join('');
 
     const saved = store.get('search');
-    if (saved?.city?.code) state.search.city = saved.city;
+    if (saved?.zone?.code) state.search.zone = saved.zone;
+    else if (saved?.city?.code) state.search.zone = { type: 'commune', code: saved.city.code, nom: saved.city.nom }; // ancien format
     if (saved?.trade) state.search.trade = saved.trade;
+    if (saved?.radius) state.search.radius = saved.radius;
     state.search.trade ||= state.config.trades[0].slug;
     sel.value = state.search.trade;
-    if (state.search.city) $('#city-input').value = state.search.city.nom;
+    if (state.search.zone) $('#city-input').value = zoneInputLabel(state.search.zone);
+    $('#radius-select').value = String(state.search.radius);
+    syncRadiusField();
 
     bindCombo();
 
+    const rerun = () => state.search.zone && runSearch();
     $('#search-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      if (!state.search.city || $('#city-input').value.trim() !== state.search.city.nom) {
+      if (!state.search.zone || $('#city-input').value.trim() !== zoneInputLabel(state.search.zone)) {
         const first = await fetchCommunes($('#city-input').value);
-        if (!first.length) return toast('Choisissez une ville dans la liste');
-        state.search.city = { code: first[0].code, nom: first[0].nom };
-        $('#city-input').value = first[0].nom;
+        if (!first.length) return toast('Choisissez une ville, un département ou une région dans la liste');
+        setZone(first[0]);
       }
       state.search.trade = sel.value;
-      store.set('search', { city: state.search.city, trade: state.search.trade });
+      store.set('search', { zone: state.search.zone, trade: state.search.trade, radius: state.search.radius });
       runSearch();
     });
-    sel.addEventListener('change', () => state.search.city && $('#search-form').requestSubmit());
-    $$('.chip').forEach((chip) =>
+    sel.addEventListener('change', () => state.search.zone && $('#search-form').requestSubmit());
+    $('#radius-select').addEventListener('change', (e) => {
+      state.search.radius = Number(e.target.value);
+      store.set('search', { zone: state.search.zone, trade: state.search.trade, radius: state.search.radius });
+      rerun();
+    });
+    $$('.status-chip').forEach((chip) =>
       chip.addEventListener('click', () => {
         state.search.status = chip.dataset.status;
-        $$('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
-        if (state.search.city) runSearch();
+        $$('.status-chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+        rerun();
       }),
     );
+    $('#fav-chip').addEventListener('click', (e) => {
+      state.search.fav = !state.search.fav;
+      e.currentTarget.setAttribute('aria-pressed', String(state.search.fav));
+      rerun();
+    });
     $('#min-select').addEventListener('change', (e) => {
       state.search.min = Number(e.target.value);
-      if (state.search.city) runSearch();
+      rerun();
     });
+    $('#contact-select').addEventListener('change', (e) => {
+      state.search.contact = e.target.value;
+      rerun();
+    });
+    $('#source-select').addEventListener('change', (e) => {
+      state.search.source = e.target.value;
+      rerun();
+    });
+    $('#map-toggle').addEventListener('click', toggleMap);
     $('#more-btn').addEventListener('click', () => runSearch({ append: true }));
     $('#results').addEventListener('click', onResultClick);
+    if (store.get('map')) toggleMap();
+  }
+
+  const ZONE_TYPES = { commune: 'Commune', departement: 'Département', region: 'Région' };
+  const zoneInputLabel = (z) => (z.type === 'departement' ? `${z.nom} (${z.code})` : z.nom);
+
+  function setZone(item) {
+    state.search.zone = { type: item.type ?? 'commune', code: item.code, nom: item.nom };
+    $('#city-input').value = zoneInputLabel(state.search.zone);
+    syncRadiusField();
+  }
+
+  /** Le rayon n'a de sens qu'autour d'une commune. */
+  function syncRadiusField() {
+    $('#radius-field').hidden = state.search.zone?.type !== 'commune';
+  }
+
+  function zoneParam() {
+    const z = state.search.zone;
+    if (z.type === 'commune' && state.search.radius > 0) return `rayon:${z.code}:${state.search.radius}`;
+    return `${z.type}:${z.code}`;
   }
 
   async function fetchCommunes(q) {
@@ -238,10 +283,11 @@
     const render = () => {
       if (!items.length) return close();
       list.innerHTML = items
-        .map(
-          (c, i) =>
-            `<li role="option" id="city-opt-${i}" data-i="${i}" aria-selected="${i === active}">${h(c.nom)} <span class="muted">(${h(c.codesPostaux?.[0] ?? c.departement)})</span></li>`,
-        )
+        .map((c, i) => {
+          const type = c.type ?? 'commune';
+          const detail = type === 'commune' ? c.codesPostaux?.[0] ?? c.departement : type === 'departement' ? `Département ${c.code}` : 'Région';
+          return `<li role="option" id="city-opt-${i}" data-i="${i}" aria-selected="${i === active}">${h(c.nom)} <span class="muted">(${h(detail)})</span></li>`;
+        })
         .join('');
       list.hidden = false;
       input.setAttribute('aria-expanded', 'true');
@@ -250,8 +296,7 @@
     const choose = (i) => {
       const c = items[i];
       if (!c) return;
-      state.search.city = { code: c.code, nom: c.nom };
-      input.value = c.nom;
+      setZone(c);
       close();
       $('#search-form').requestSubmit();
     };
@@ -300,15 +345,19 @@
     if (!append && !silent) {
       $('#results-head').hidden = true;
       $('#more-btn').hidden = true;
-      results.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Analyse des entreprises de ${h(s.city.nom)}… Les premiers résultats arrivent en quelques secondes.</div>`;
+      results.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Analyse des entreprises (${h(s.zone.nom)})… Les premiers résultats arrivent en quelques secondes.</div>`;
     }
-    const qs = new URLSearchParams({ city: s.city.code, trade: s.trade, status: s.status, min: String(s.min), offset: String(append ? s.offset : 0) });
+    const qs = new URLSearchParams({ zone: zoneParam(), trade: s.trade, status: s.status, min: String(s.min), offset: String(append ? s.offset : 0) });
+    if (s.contact) qs.set('contact', s.contact);
+    if (s.source) qs.set('source', s.source);
+    if (s.fav) qs.set('fav', '1');
     try {
       const data = await api(`/api/prospects?${qs}`);
       if (mine !== searchSeq) return;
       s.items = append ? [...s.items, ...data.items] : data.items;
       s.total = data.total;
       s.offset = s.items.length;
+      s.zoneInfo = data.zone;
       if (state.user) setUser({ ...state.user, quota: data.quota });
       renderResults(data);
       // Collecte encore en cours (sources lentes) ou audits de sites en attente : on rafraîchit
@@ -334,19 +383,39 @@
     const s = state.search;
     const t = trade(s.trade);
     $('#results-head').hidden = false;
-    $('#results-title').textContent = `${fmt(s.total)} ${t ? t.plural : 'entreprises'} à ${data.commune.nom}`;
+    const where = data.zone?.kind === 'commune' ? `à ${data.zone.label}` : `· ${data.zone?.label ?? data.commune.nom}`;
+    $('#results-title').textContent = `${fmt(s.total)} ${t ? t.plural : 'entreprises'} ${where}`;
     const sub = [];
     if (data.search?.pending) sub.push('Recherche en cours, la liste se complète automatiquement…');
-    else if (data.search?.fetched_at) sub.push(`Données mises à jour le ${fmtDate(data.search.fetched_at)}`);
-    if (data.search?.errors?.length) sub.push(`Source partiellement indisponible : ${data.search.errors.join(' ; ')}`);
+    else if (data.search?.fetched_at) sub.push(`Données récupérées le ${fmtDate(data.search.fetched_at)}`);
+    if (data.search?.errors?.length) sub.push(`Résultats incomplets : ${data.search.errors.join(' ; ')}`);
     $('#results-sub').textContent = sub.join(' · ');
+
+    // Couverture réelle d'une zone multi-communes : jamais présentée comme exhaustive.
+    const cov = data.coverage;
+    const covEl = $('#coverage');
+    covEl.hidden = !cov;
+    if (cov) {
+      const pct = cov.total ? Math.round((cov.analysed / cov.total) * 100) : 0;
+      covEl.innerHTML = `<strong>Couverture : ${fmt(cov.analysed)} commune${cov.analysed > 1 ? 's' : ''} analysée${cov.analysed > 1 ? 's' : ''} sur ${fmt(cov.total)} (${pct} %).</strong> ${
+        cov.queued ? `${fmt(cov.queued)} autres sont en file d’analyse et s’ajouteront progressivement (les plus peuplées d’abord).` : ''
+      } Les sources publiques ne recensent pas toutes les entreprises : cette liste n’est pas exhaustive.`;
+    }
+
+    const usage = data.searchUsage;
+    $('#search-usage').hidden = !usage;
+    if (usage) $('#search-usage').textContent = `Recherches aujourd’hui : ${usage.used} / ${usage.limit}`;
+
+    renderMap();
     if (!s.items.length && data.search?.pending) {
-      $('#results').innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Interrogation d’OpenStreetMap… les résultats s’affichent dès qu’ils arrivent.</div>`;
+      $('#results').innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span>Interrogation des sources (OpenStreetMap, SIRENE)… les résultats s’affichent dès qu’ils arrivent.</div>`;
       $('#more-btn').hidden = true;
       return;
     }
     if (!s.items.length) {
-      $('#results').innerHTML = `<div class="empty"><p><strong>Aucune entreprise pour ces critères.</strong></p><p>Essayez un autre métier, une commune voisine plus grande, ou retirez les filtres.</p></div>`;
+      $('#results').innerHTML = `<div class="empty"><p><strong>Aucune entreprise pour ces critères.</strong></p><p>${
+        s.fav ? 'Vous n’avez pas encore de favori dans cette zone : cliquez sur ☆ sur une fiche pour l’ajouter.' : 'Essayez un autre métier, élargissez la zone (rayon, département) ou retirez des filtres.'
+      }</p></div>`;
       $('#more-btn').hidden = true;
       return;
     }
@@ -354,7 +423,65 @@
     $('#more-btn').hidden = s.items.length >= s.total;
   }
 
-  const statusClass = (st) => (['none', 'social', 'down', 'unknown'].includes(st) ? 'tag-hot' : st === 'weak' ? 'tag-warn' : st === 'ok' ? 'tag-ok' : '');
+  // --- Carte (Leaflet, synchronisée avec la liste) ------------------------------------------
+
+  let map = null;
+  let markersLayer = null;
+  const markerById = new Map();
+
+  function toggleMap() {
+    const el = $('#map');
+    const show = el.hidden;
+    el.hidden = !show;
+    $('#map-note').hidden = !show;
+    $('#map-toggle').setAttribute('aria-pressed', String(show));
+    $('#map-toggle').textContent = show ? 'Masquer la carte' : 'Afficher la carte';
+    store.set('map', show);
+    if (show) renderMap();
+  }
+
+  function renderMap() {
+    if ($('#map').hidden || !window.L) return;
+    if (!map) {
+      map = L.map('map', { scrollWheelZoom: false }).setView([46.6, 2.4], 6);
+      L.tileLayer(state.config.map.tileUrl, { maxZoom: 19, attribution: h(state.config.map.attribution) }).addTo(map);
+      markersLayer = L.layerGroup().addTo(map);
+    }
+    setTimeout(() => map.invalidateSize(), 0);
+    markersLayer.clearLayers();
+    markerById.clear();
+    const pts = [];
+    for (const p of state.search.items) {
+      if (p.lat === null || p.lon === null) continue;
+      const color = p.opportunity >= 80 ? '#c2410c' : p.opportunity >= 60 ? '#b45309' : '#3f6f63';
+      const m = L.circleMarker([p.lat, p.lon], { radius: 7, color, weight: 2, fillColor: color, fillOpacity: p.unlocked ? 0.9 : 0.45 });
+      m.bindPopup(`<strong>${h(p.name)}</strong><br>${h(p.statusLabel)} · score ${p.opportunity}<br><button type="button" class="btn-link" data-goto-card="${h(p.id)}">Voir dans la liste</button>`);
+      m.on('click', () => highlightCard(p.id, false));
+      m.addTo(markersLayer);
+      markerById.set(p.id, m);
+      pts.push([p.lat, p.lon]);
+    }
+    const center = state.search.zoneInfo?.center;
+    if (pts.length) map.fitBounds(pts, { padding: [24, 24], maxZoom: 15 });
+    else if (center) map.setView([center.lat, center.lon], 11);
+  }
+
+  function highlightCard(id, scroll) {
+    $$('.card.is-active').forEach((c) => c.classList.remove('is-active'));
+    const card = $(`.card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.add('is-active');
+    if (scroll) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-goto-card]');
+    if (b) highlightCard(b.dataset.gotoCard, true);
+  });
+
+  const statusClass = (st) =>
+    ['none', 'verified_none', 'social', 'down', 'unknown'].includes(st) ? 'tag-hot' : st === 'weak' ? 'tag-warn' : st === 'ok' ? 'tag-ok' : '';
+  const factorsText = (p) => (p.scoreFactors ?? []).map((f) => `${f.points > 0 ? '+' : ''}${f.points} : ${f.label}`).join('\n');
   const scoreClass = (n) => (n >= 80 ? 'score-hot' : n >= 60 ? 'score-warm' : '');
 
   function ageLabel(created) {
@@ -382,11 +509,17 @@
       const left = quota ? ` <span class="small">(${quota.remaining} restantes)</span>` : '';
       actions = `<button type="button" class="btn btn-sm" data-unlock="${h(p.id)}">Débloquer${left}</button>`;
     }
-    return `<article class="card${p.unlocked ? ' unlocked' : ''}">
-  <div class="score ${scoreClass(p.opportunity)}" title="Score d’opportunité sur 100" aria-label="Score d’opportunité ${p.opportunity} sur 100">${p.opportunity}</div>
+    const fav = `<button type="button" class="fav-btn" data-fav="${h(p.id)}" aria-pressed="${Boolean(p.favorite)}" title="${
+      p.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'
+    }" aria-label="${p.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}">${p.favorite ? '★' : '☆'}</button>`;
+    return `<article class="card${p.unlocked ? ' unlocked' : ''}" data-id="${h(p.id)}">
+  <div class="score ${scoreClass(p.opportunity)}" title="Score d’opportunité sur 100 :\n${h(factorsText(p))}" aria-label="Score d’opportunité ${p.opportunity} sur 100">${p.opportunity}</div>
   <div>
-    <h3>${h(p.name)}</h3>
+    <h3>${h(p.name)} ${fav}</h3>
     <p class="meta">${h(meta)}</p>
+    <p class="small muted">Source : ${h(p.sourceLabel ?? p.source)} · mise à jour le ${h(fmtDate(p.updated_at))}${
+      p.lat !== null ? ` · <button type="button" class="btn-link" data-locate="${h(p.id)}">voir sur la carte</button>` : ''
+    }</p>
     <p><span class="tag ${statusClass(p.site_status)}">${h(p.statusLabel)}</span>${p.audit_score !== null && p.site_status !== 'down' ? `<span class="tag">Site : ${p.audit_score}/100</span>` : ''}${
       p.hasPhone ? '<span class="tag">Téléphone</span>' : ''
     }${p.hasEmail ? '<span class="tag">Email</span>' : ''}${p.lead ? `<span class="tag tag-ok">${h(STATUS_LABELS[p.lead.status] ?? p.lead.status)}</span>` : ''}</p>
@@ -410,15 +543,44 @@
   async function onResultClick(e) {
     const unlock = e.target.closest('[data-unlock]');
     const open = e.target.closest('[data-open]');
+    const favBtn = e.target.closest('[data-fav]');
+    const locate = e.target.closest('[data-locate]');
     if (open) return openLead(open.dataset.open);
+    if (locate) {
+      if ($('#map').hidden) toggleMap();
+      const m = markerById.get(locate.dataset.locate);
+      if (m && map) {
+        map.setView(m.getLatLng(), Math.max(map.getZoom(), 14));
+        m.openPopup();
+        $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return highlightCard(locate.dataset.locate, false);
+    }
+    if (favBtn) {
+      const id = favBtn.dataset.fav;
+      const on = favBtn.getAttribute('aria-pressed') !== 'true';
+      favBtn.disabled = true;
+      try {
+        await api(`/api/prospects/${encodeURIComponent(id)}/favorite`, { method: 'PUT', body: { on } });
+        const p = state.search.items.find((x) => x.id === id);
+        if (p) p.favorite = on;
+        $('#results').innerHTML = state.search.items.map(cardHtml).join('');
+        toast(on ? 'Ajouté aux favoris' : 'Retiré des favoris');
+      } catch (err) {
+        favBtn.disabled = false;
+        handleError(err);
+      }
+      return;
+    }
     if (!unlock) return;
     unlock.disabled = true;
     try {
       const data = await api(`/api/prospects/${encodeURIComponent(unlock.dataset.unlock)}/unlock`, { method: 'POST' });
       setUser({ ...state.user, quota: data.quota });
       const i = state.search.items.findIndex((p) => p.id === data.prospect.id);
-      if (i >= 0) state.search.items[i] = data.prospect;
+      if (i >= 0) state.search.items[i] = { ...data.prospect, favorite: state.search.items[i].favorite };
       $('#results').innerHTML = state.search.items.map(cardHtml).join('');
+      renderMap();
       openLead(data.prospect.id);
     } catch (err) {
       unlock.disabled = false;
@@ -460,7 +622,25 @@
       ['État du site', `${p.statusLabel}${p.audit_score !== null && p.site_status !== 'down' ? ` (${p.audit_score}/100)` : ''}`],
       ['Création', p.created_on ? fmtDate(p.created_on) : ''],
       ['SIRET', p.siret ?? ''],
+      ['Source', `${p.sourceLabel ?? p.source}, données du ${fmtDate(p.updated_at)}`],
     ].filter(([, v]) => v);
+    const check = p.lead.site_check;
+    const siteCheck = `
+<h3 class="section-title">Vérification du site</h3>
+<p class="small muted">${
+      check === 'verified_none'
+        ? `Vous avez vérifié le ${h(fmtDate(p.lead.checked_at))} : aucun site trouvé.`
+        : check === 'site_found'
+          ? `Vous avez trouvé un site le ${h(fmtDate(p.lead.checked_at))} : il a été audité.`
+          : 'L’absence de site dans une source publique ne prouve pas que l’entreprise n’en a pas. Vérifiez (Google, Pages Jaunes…) avant de la contacter : le message s’adapte au résultat.'
+    }</p>
+<form id="site-check-form" class="row" novalidate>
+  <button type="button" class="btn btn-sm btn-ghost" data-check="verified_none"${check === 'verified_none' ? ' disabled' : ''}>Aucun site trouvé</button>
+  <input type="url" name="url" placeholder="https://site-trouvé.fr" aria-label="Adresse du site trouvé" value="${h(check === 'site_found' ? p.lead.site_check_url ?? '' : '')}">
+  <button type="submit" class="btn btn-sm btn-ghost">Site trouvé : l’auditer</button>
+  ${check ? '<button type="button" class="btn-link small" data-check="">Revenir aux données de la source</button>' : ''}
+</form>`;
+    const factors = (p.scoreFactors ?? []).map((f) => `<li><strong>${f.points > 0 ? '+' : ''}${f.points}</strong> ${h(f.label)}</li>`).join('');
     const q = encodeURIComponent(`${p.name} ${p.city ?? ''}`);
     const map = p.lat && p.lon ? ` · <a href="https://www.openstreetmap.org/?mlat=${p.lat}&amp;mlon=${p.lon}#map=18/${p.lat}/${p.lon}" target="_blank" rel="noopener">Voir sur la carte</a>` : '';
     const issues = p.issues.filter((i) => i.weight > 0);
@@ -471,6 +651,8 @@
 ${profileComplete ? '' : '<p class="notice warn">Complétez votre <button type="button" class="btn-link" data-goto="profile">profil</button> pour signer vos messages avec votre nom et votre téléphone.</p>'}
 <dl class="facts">${facts.map(([k, v, raw]) => `<dt>${h(k)}</dt><dd>${raw ? v : h(v)}</dd>`).join('')}</dl>
 <p class="small"><a href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener">Rechercher sur Google</a>${map}</p>
+<details class="score-details"><summary>Pourquoi ce score de ${p.opportunity}/100 ?</summary><ul class="factors">${factors}</ul></details>
+${siteCheck}
 ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients</h3><ul class="issues">${issues.map((i) => `<li>${h(i.label)}</li>`).join('')}</ul>` : ''}
 <h3 class="section-title">Message de prospection</h3>
 <div class="tabs" role="tablist" aria-label="Type de message">
@@ -516,6 +698,24 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
     $('[data-goto]', $('#lead-body'))?.addEventListener('click', () => {
       $('#lead-dialog').close();
       go('profile');
+    });
+    const saveCheck = async (body, btn) => {
+      if (btn) btn.disabled = true;
+      try {
+        await api(`/api/leads/${encodeURIComponent(p.id)}/site-check`, { method: 'PUT', body });
+        toast(body.kind === 'site_found' ? 'Site audité' : 'Vérification enregistrée');
+        openLead(p.id); // recharge la fiche, le score et le message adaptés
+      } catch (e) {
+        if (btn) btn.disabled = false;
+        handleError(e);
+      }
+    };
+    $$('[data-check]', $('#lead-body')).forEach((b) => b.addEventListener('click', () => saveCheck({ kind: b.dataset.check || null }, b)));
+    $('#site-check-form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const url = new FormData(ev.target).get('url');
+      if (!String(url ?? '').trim()) return toast('Indiquez l’adresse du site trouvé');
+      saveCheck({ kind: 'site_found', url }, ev.submitter);
     });
     $('#lead-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
@@ -802,7 +1002,7 @@ ${issues.length ? `<h3 class="section-title">Ce qui lui fait perdre des clients<
       setUser(me.user);
       go(HASH_TO_VIEW[hash] ?? 'search', { push: true });
       handlePaymentReturn().catch(() => {});
-      if (state.view === 'search' && state.search.city) runSearch();
+      if (state.view === 'search' && state.search.zone) runSearch();
     } catch (e) {
       $('#boot').innerHTML = `<p class="empty">${h(e.message)}</p>`;
     }

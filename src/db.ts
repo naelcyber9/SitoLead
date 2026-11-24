@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS searches (
   errors     TEXT
 );
 
+-- Collecte OpenStreetMap par commune (tous les métiers en une requête).
+-- fetched_at : dernière réussite ; failed_at : dernier échec (pour espacer les nouvelles tentatives).
+CREATE TABLE IF NOT EXISTS osm_cities (
+  city_code  TEXT PRIMARY KEY,
+  city_name  TEXT NOT NULL,
+  fetched_at TEXT,
+  failed_at  TEXT,
+  error      TEXT
+);
+
 CREATE TABLE IF NOT EXISTS leads (
   user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   prospect_id    TEXT NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
@@ -80,6 +90,47 @@ CREATE TABLE IF NOT EXISTS leads (
   PRIMARY KEY (user_id, prospect_id)
 );
 CREATE INDEX IF NOT EXISTS idx_leads_user_unlocked ON leads (user_id, unlocked_at);
+
+-- Communes à collecter en tâche de fond (recherches par département, région ou rayon) :
+-- traitées lentement pour respecter les quotas des sources publiques.
+CREATE TABLE IF NOT EXISTS collect_queue (
+  city_code    TEXT NOT NULL,
+  city_name    TEXT NOT NULL,
+  departement  TEXT NOT NULL,
+  trade        TEXT NOT NULL,
+  population   INTEGER NOT NULL DEFAULT 0,
+  requested_at TEXT NOT NULL,
+  PRIMARY KEY (city_code, trade)
+);
+
+-- Paramètres internes (versions de barème, etc.).
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  prospect_id TEXT NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (user_id, prospect_id)
+);
+
+-- Recherches distinctes par utilisateur et par jour (quota de recherches, maîtrise des coûts).
+-- Relancer la même recherche le même jour (pagination, rafraîchissement) ne compte qu'une fois.
+CREATE TABLE IF NOT EXISTS search_usage (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day     TEXT NOT NULL,
+  key     TEXT NOT NULL,
+  PRIMARY KEY (user_id, day, key)
+);
+
+-- Inscriptions par adresse IP (limitation des comptes gratuits créés en série). IP hachée.
+CREATE TABLE IF NOT EXISTS signups (
+  ip_hash    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_signups_ip ON signups (ip_hash, created_at);
 
 CREATE TABLE IF NOT EXISTS webhook_events (
   id          TEXT PRIMARY KEY,
@@ -99,7 +150,32 @@ export function openDatabase(path = process.env.DB_PATH ?? 'data/sitolead.db'): 
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/**
+ * Colonnes ajoutées après la création initiale des tables. `CREATE TABLE IF NOT EXISTS`
+ * ne modifie pas une table existante : on ajoute les colonnes manquantes, sans jamais
+ * supprimer ni réécrire de données.
+ */
+const COLUMNS: Record<string, [string, string][]> = {
+  leads: [
+    // Vérification du site faite par l'utilisateur sur ce prospect (propre à son compte).
+    ['site_check', 'TEXT'], // 'verified_none' | 'site_found'
+    ['site_check_url', 'TEXT'],
+    ['check_status', 'TEXT'],
+    ['check_score', 'INTEGER'],
+    ['check_issues', 'TEXT'],
+    ['checked_at', 'TEXT'],
+  ],
+};
+
+function migrate(db: DatabaseSync): void {
+  for (const [table, cols] of Object.entries(COLUMNS)) {
+    const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+    for (const [name, type] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  }
 }
 
 export const nowIso = () => new Date().toISOString();

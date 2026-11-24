@@ -8,7 +8,9 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#14231f">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/leaflet.css">
 <link rel="stylesheet" href="/assets/style.css">
+<script src="/assets/leaflet.js" defer></script>
 <script src="/assets/app.js" defer></script>
 </head>
 <body class="app-body">
@@ -69,19 +71,30 @@
     <form class="panel" id="search-form" novalidate>
       <div class="searchbar">
         <div class="field combo">
-          <span id="city-label">Ville ou code postal</span>
-          <input type="search" id="city-input" autocomplete="off" placeholder="Ex. Annecy, 69003…" role="combobox"
+          <span id="city-label">Ville, code postal, département ou région</span>
+          <input type="search" id="city-input" autocomplete="off" placeholder="Ex. Annecy, 69003, Haute-Savoie, Bretagne…" role="combobox"
             aria-labelledby="city-label" aria-autocomplete="list" aria-expanded="false" aria-controls="city-list" required>
           <ul class="combo-list" id="city-list" role="listbox" aria-labelledby="city-label" hidden></ul>
         </div>
+        <label class="field" id="radius-field" hidden><span>Autour</span>
+          <select id="radius-select">
+            <option value="0">Commune seule</option>
+            <option value="5">+ 5 km</option>
+            <option value="10">+ 10 km</option>
+            <option value="20">+ 20 km</option>
+            <option value="30">+ 30 km</option>
+            <option value="50">+ 50 km</option>
+          </select>
+        </label>
         <label class="field"><span>Métier</span><select id="trade-select" required></select></label>
         <button class="btn btn-lg" type="submit">Chercher</button>
       </div>
       <div class="filters" role="group" aria-label="Filtres">
-        <button type="button" class="chip" data-status="all" aria-pressed="true">Tous</button>
-        <button type="button" class="chip" data-status="nosite" aria-pressed="false">Sans site</button>
-        <button type="button" class="chip" data-status="weak" aria-pressed="false">Site à refaire</button>
-        <button type="button" class="chip" data-status="recent" aria-pressed="false">Créées récemment</button>
+        <button type="button" class="chip status-chip" data-status="all" aria-pressed="true">Tous</button>
+        <button type="button" class="chip status-chip" data-status="nosite" aria-pressed="false">Sans vrai site</button>
+        <button type="button" class="chip status-chip" data-status="weak" aria-pressed="false">Site à refaire</button>
+        <button type="button" class="chip status-chip" data-status="recent" aria-pressed="false">Créées récemment</button>
+        <button type="button" class="chip" id="fav-chip" aria-pressed="false">★ Favoris</button>
         <label>Score minimum
           <select id="min-select">
             <option value="0">Tous</option>
@@ -90,14 +103,36 @@
             <option value="85">85+</option>
           </select>
         </label>
+        <label>Coordonnées
+          <select id="contact-select">
+            <option value="">Toutes</option>
+            <option value="any">Téléphone ou email</option>
+            <option value="phone">Avec téléphone</option>
+            <option value="email">Avec email</option>
+          </select>
+        </label>
+        <label>Source
+          <select id="source-select">
+            <option value="">Toutes</option>
+            <option value="osm">OpenStreetMap</option>
+            <option value="sirene">SIRENE (créations récentes)</option>
+          </select>
+        </label>
       </div>
     </form>
     <div class="results-head" id="results-head" hidden>
-      <h2 id="results-title"></h2>
-      <p class="small muted" id="results-sub"></p>
+      <div>
+        <h2 id="results-title"></h2>
+        <p class="small muted" id="results-sub"></p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="map-toggle" aria-pressed="false" aria-controls="map">Afficher la carte</button>
     </div>
+    <div id="coverage" class="notice" hidden></div>
+    <div id="map" class="map" hidden aria-label="Carte des entreprises trouvées"></div>
+    <p class="small muted" id="map-note" hidden>Positions approximatives (à environ 1 km) tant que l’entreprise n’est pas débloquée.</p>
     <div id="results" class="results" aria-live="polite"></div>
     <div class="more"><button type="button" class="btn btn-ghost" id="more-btn" hidden>Voir plus d’entreprises</button></div>
+    <p class="small muted center" id="search-usage" hidden></p>
   </section>
 
   <!-- Pipeline -->

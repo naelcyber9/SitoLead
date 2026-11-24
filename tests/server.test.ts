@@ -235,3 +235,94 @@ test('connexion, déconnexion, suppression de compte', async () => {
   assert.equal((await call('GET', '/api/me')).data.user, null);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users WHERE email = ?').get('temp@studio.fr')!.n, 0);
 });
+
+// --- Phase 1 : favoris, filtres, vérification du site, quotas, inscriptions --------------
+
+test('favoris, filtres, vérification du site et message prudent', async () => {
+  cookie = '';
+  const s = await call('POST', '/api/signup', { email: 'leo@atelier.fr', password: 'motdepasse3', terms: true });
+  assert.equal(s.status, 201);
+  cookie = (s.headers.get('set-cookie') ?? '').split(';')[0]!;
+
+  const all = await call('GET', '/api/prospects?zone=commune:74010&trade=plombier');
+  assert.equal(all.status, 200);
+  assert.equal(all.data.zone.kind, 'commune');
+  const p0 = all.data.items[0];
+  assert.ok(p0.sourceLabel && p0.updated_at, 'source et date affichées');
+  assert.ok(Array.isArray(p0.scoreFactors) && p0.scoreFactors.length > 0, 'score expliqué');
+  assert.equal(p0.scoreFactors.reduce((n: number, f: { points: number }) => n + f.points, 0), p0.opportunity);
+  assert.equal(p0.approxPosition, true);
+
+  // Filtre coordonnées : 4 fiches sur 8 ont un email
+  assert.equal((await call('GET', '/api/prospects?zone=commune:74010&trade=plombier&contact=email')).data.total, 4);
+
+  // Favoris
+  const id = all.data.items[1].id;
+  assert.equal((await call('PUT', `/api/prospects/${encodeURIComponent(id)}/favorite`, { on: true })).status, 200);
+  const favs = await call('GET', '/api/prospects?zone=commune:74010&trade=plombier&fav=1');
+  assert.equal(favs.data.total, 1);
+  assert.equal(favs.data.items[0].favorite, true);
+  assert.equal((await call('PUT', '/api/prospects/osm%3Anode%2F999999/favorite', { on: true })).status, 404);
+
+  // Vérification du site : réservée aux fiches débloquées, propre au compte
+  const lockedCheck = await call('PUT', `/api/leads/${encodeURIComponent(id)}/site-check`, { kind: 'verified_none' });
+  assert.equal(lockedCheck.status, 404);
+  await call('POST', `/api/prospects/${encodeURIComponent(id)}/unlock`, {});
+  const before = await call('GET', `/api/leads/${encodeURIComponent(id)}/pitch`);
+  assert.match(before.data.pitch.email, /Sauf erreur de ma part/); // site non renseigné : formulation prudente
+  const checked = await call('PUT', `/api/leads/${encodeURIComponent(id)}/site-check`, { kind: 'verified_none' });
+  assert.equal(checked.status, 200);
+  assert.equal(checked.data.lead.site_status, 'verified_none');
+  assert.equal(checked.data.lead.statusLabel, 'Aucun site trouvé après vérification');
+  const afterPitch = await call('GET', `/api/leads/${encodeURIComponent(id)}/pitch`);
+  assert.match(afterPitch.data.pitch.email, /je n’ai pas trouvé de site/);
+  assert.equal((await call('PUT', `/api/leads/${encodeURIComponent(id)}/site-check`, { kind: 'site_found', url: 'pas une url' })).status, 400);
+  // La fiche partagée n'est pas modifiée pour les autres utilisateurs
+  assert.notEqual(db.prepare('SELECT site_status FROM prospects WHERE id = ?').get(id)!.site_status, 'verified_none');
+
+  // Zone invalide, recherche par département impossible hors ligne
+  assert.equal((await call('GET', '/api/prospects?zone=nimporte:1&trade=plombier')).status, 400);
+  assert.equal((await call('GET', '/api/prospects?zone=departement:74&trade=plombier')).status, 503);
+});
+
+test('quota de recherches quotidien : la pagination ne consomme pas, une nouvelle recherche si', async () => {
+  const before = (await call('GET', '/api/prospects?zone=commune:74010&trade=plombier')).data.searchUsage;
+  assert.equal((await call('GET', '/api/prospects?zone=commune:74010&trade=plombier&offset=50')).data.searchUsage.used, before.used);
+  const cities = ['75056', '13055', '69123', '31555', '06088', '44109', '34172', '67482', '33063', '59350', '35238', '51454'];
+  let last = 200;
+  let n = before.used;
+  outer: for (const c of cities) {
+    for (const t of ['coiffeur', 'restaurant']) {
+      const r = await call('GET', `/api/prospects?zone=commune:${c}&trade=${t}`);
+      last = r.status;
+      if (r.status !== 200) break outer;
+      n = r.data.searchUsage.used;
+    }
+  }
+  assert.equal(last, 429);
+  assert.equal(n, before.limit);
+  // Une recherche déjà faite aujourd'hui reste accessible
+  assert.equal((await call('GET', '/api/prospects?zone=commune:74010&trade=plombier')).status, 200);
+});
+
+test('inscriptions : adresses jetables refusées, nombre de comptes par connexion limité', async () => {
+  // Instance séparée : son propre limiteur de tentatives, la même base (nina, temp et leo déjà inscrits depuis 127.0.0.1).
+  const handler = createApp({ db, appUrl: 'https://sitolead.test', live: false });
+  const srv = createServer((req, res) => void handler(req, res));
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/signup`;
+  const post = (email: string) =>
+    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'motdepasse4', terms: true }) }).then(
+      async (r) => ({ status: r.status, data: (await r.json()) as { error: string } }),
+    );
+  try {
+    const disposable = await post('x@yopmail.com');
+    assert.equal(disposable.status, 400);
+    assert.match(disposable.data.error, /jetables/);
+    const fourth = await post('quatrieme@atelier.fr');
+    assert.equal(fourth.status, 429);
+    assert.match(fourth.data.error, /Trop de comptes créés/);
+  } finally {
+    srv.close();
+  }
+});
