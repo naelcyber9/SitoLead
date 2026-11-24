@@ -25,6 +25,7 @@ paiement (les boutons d'abonnement affichent un message tant que Stripe n'est pa
 | `npm test` | Tests automatisés (`node --test`) |
 | `npm run typecheck` | Vérification TypeScript |
 | `npm run seed -- annecy plombier` | Pré-remplit la base pour une ville (et des métiers) |
+| `npm run admin -- vous@exemple.fr` | Crée le compte administrateur (ou donne le rôle à un compte existant) |
 | `node src/cli/optout.ts <siret\|email\|téléphone>` | Enregistre une demande de suppression |
 
 ## Organisation du code

@@ -49,6 +49,8 @@ const MOCKUP_HEADERS: Record<string, string> = {
 
 import { aiConfigured, aiQuota, isTone, suggestTexts, type Generate } from './ai.ts';
 import { STATUS_LABELS, advanceStatus, listEvents, logEvent, migrateStatuses, userStats } from './crm.ts';
+import { alerts, backupDatabase, exportUserData, grantCredits, isAdmin, listUsers, logError, overview, recentErrors } from './admin.ts';
+import { addOptOuts, optOutKey } from './prospects.ts';
 import { deleteAllMedia, deleteMedia, listMedia, mediaQuota, ownsMedia, readMedia, saveImage } from './media.ts';
 
 const creatorOf = (u: Pick<UserRow, 'full_name' | 'agency_name' | 'email' | 'phone'>): Creator => ({
@@ -184,6 +186,7 @@ function publicUser(db: DB, u: UserRow) {
     plan_status: u.plan_status,
     period_end: u.period_end,
     billing_interval: u.billing_interval ?? null,
+    admin: isAdmin(u),
     /** Paiement échoué : date jusqu'à laquelle l'accès est maintenu. */
     graceEndsAt: graceEndsAt(u),
     csv: plan.csv,
@@ -236,6 +239,13 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
   function requireUser(req: IncomingMessage): UserRow {
     const u = userBySession(db, cookies(req).sid);
     if (!u) throw new HttpError(401, 'Connectez-vous pour continuer');
+    return u;
+  }
+
+  /** Espace d'administration : rôle « admin » obligatoire (404 pour les autres, sans révéler la route). */
+  function requireAdmin(req: IncomingMessage): UserRow {
+    const u = requireUser(req);
+    if (!isAdmin(u)) throw new HttpError(404, 'Route inconnue');
     return u;
   }
 
@@ -368,6 +378,54 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         logEvent(db, u.id, lead.id, 'mockup', r.mockup.id);
         advanceStatus(db, u.id, lead.id, ['debloque'], 'maquette');
         return json(res, 201, { mockup: mockupView(r.mockup, appUrl), mockupQuota: mockupQuota(db, u) });
+      }
+
+      case 'PUT /api/me/password': {
+        const u = requireUser(req);
+        if (!authLimiter.allow(`pw${u.id}`)) throw new HttpError(429, 'Trop de tentatives, réessayez dans quelques minutes');
+        const b = await readJson(req);
+        const row = db.prepare('SELECT pass_hash FROM users WHERE id = ?').get(u.id) as { pass_hash: string };
+        if (!(await verifyPassword(String(b.current ?? ''), row.pass_hash))) throw new HttpError(403, 'Mot de passe actuel incorrect');
+        const err = validatePassword(b.next);
+        if (err) throw new HttpError(400, err);
+        db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(await hashPassword(String(b.next)), u.id);
+        // Les autres sessions ouvertes sont fermées ; celle-ci est conservée.
+        const sid = cookies(req).sid ?? '';
+        db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(u.id, createHash('sha256').update(sid).digest('hex'));
+        return json(res, 200, { ok: true });
+      }
+
+      case 'GET /api/me/export': {
+        const u = requireUser(req);
+        return send(res, 200, JSON.stringify(exportUserData(db, u.id), null, 2), 'application/json; charset=utf-8', {
+          'content-disposition': `attachment; filename="mes-donnees-sitolead-${new Date().toISOString().slice(0, 10)}.json"`,
+          'cache-control': 'no-store',
+        });
+      }
+
+      case 'GET /api/admin/overview': {
+        requireAdmin(req);
+        const o = overview(db);
+        return json(res, 200, { overview: o, alerts: alerts(o), errors: recentErrors(db, 30) });
+      }
+
+      case 'GET /api/admin/users': {
+        requireAdmin(req);
+        return json(res, 200, { items: listUsers(db, url.searchParams.get('q') ?? '') });
+      }
+
+      case 'POST /api/admin/optouts': {
+        // Demande de suppression d'une entreprise (RGPD) : SIRET, SIREN, email, téléphone ou identifiant de fiche.
+        requireAdmin(req);
+        const key = optOutKey(String((await readJson(req)).value ?? ''));
+        if (!key) throw new HttpError(400, 'Valeur non reconnue : SIRET, SIREN, email, téléphone ou identifiant de fiche');
+        const removed = addOptOuts(db, [key], 'Demande de suppression reçue par l’administration');
+        return json(res, 200, { key, removed });
+      }
+
+      case 'POST /api/admin/backup': {
+        requireAdmin(req);
+        return json(res, 200, { file: backupDatabase(db) });
       }
 
       case 'GET /api/stats': {
@@ -687,6 +745,12 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         return void res.end(renderMockup(parseData(own), creatorOf(u)));
       }
     }
+    if (parts[1] === 'admin' && parts[2] === 'users' && parts.length === 5 && parts[4] === 'credits' && method === 'POST') {
+      const admin = requireAdmin(req);
+      const amount = Number((await readJson(req)).amount);
+      if (!grantCredits(db, Number(parts[3]), amount, admin.id)) throw new HttpError(400, 'Nombre de crédits ou utilisateur invalide');
+      return json(res, 200, { ok: true });
+    }
     if (parts[1] === 'media' && parts.length === 3 && method === 'DELETE') {
       const u = requireUser(req);
       if (!(await deleteMedia(db, u.id, parts[2]!))) throw new HttpError(404, 'Image introuvable');
@@ -853,6 +917,8 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         return send(res, e.status, e.message, 'text/plain; charset=utf-8');
       }
       console.error(`[${nowIso()}] ${method} ${url.pathname}`, e);
+      // Chemin sans identifiants (pas de donnée personnelle dans le journal d'erreurs).
+      logError(db, `${method} ${url.pathname.replace(/\/[^/]*[0-9:%][^/]*/g, '/…')}`, e);
       if (!res.headersSent) json(res, 500, { error: 'Erreur interne, réessayez dans un instant' });
       else res.end();
     }
@@ -879,6 +945,19 @@ export function startServer(opts: Partial<AppOptions> & { port?: number; host?: 
   timer.unref();
   // Préchargement des grandes villes : au démarrage puis toutes les 15 minutes (ce qui est
   // à jour est sauté, ce qui a échoué est retenté). Désactivable avec WARM_CACHE=0.
+  // Sauvegarde quotidienne de la base (BACKUP=0 pour la désactiver), vérifiée toutes les 6 heures.
+  const backupOnce = () => {
+    if (process.env.BACKUP === '0') return;
+    try {
+      backupDatabase(db);
+    } catch (e) {
+      console.error('Sauvegarde impossible :', (e as Error).message);
+    }
+  };
+  const backupTimer = setInterval(backupOnce, 6 * 3_600_000);
+  backupTimer.unref();
+  setTimeout(backupOnce, 10_000).unref();
+  server.on('close', () => clearInterval(backupTimer));
   const warm = live && process.env.WARM_CACHE !== '0';
   const warmTimer = setInterval(() => warm && void warmCache(db).catch(() => {}), 15 * 60_000);
   warmTimer.unref();

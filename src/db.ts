@@ -136,6 +136,14 @@ CREATE TABLE IF NOT EXISTS credits (
   created_at TEXT NOT NULL
 );
 
+-- Erreurs techniques (sans donnée personnelle : route et message), pour l'administration.
+CREATE TABLE IF NOT EXISTS app_errors (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  at      TEXT NOT NULL,
+  route   TEXT NOT NULL,
+  message TEXT NOT NULL
+);
+
 -- Historique du suivi commercial (déblocage, statuts, maquettes, messages préparés…).
 CREATE TABLE IF NOT EXISTS lead_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,6 +249,8 @@ const COLUMNS: Record<string, [string, string][]> = {
   users: [
     ['payment_failed_at', 'TEXT'],
     ['billing_interval', 'TEXT'],
+    // 'admin' pour l'espace d'administration ; null pour un utilisateur normal.
+    ['role', 'TEXT'],
   ],
 };
 

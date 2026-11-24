@@ -88,6 +88,8 @@ export interface UserRow {
   /** Premier échec de paiement non régularisé (délai de grâce). */
   payment_failed_at?: string | null;
   billing_interval?: string | null;
+  /** 'admin' pour l'administrateur. */
+  role?: string | null;
 }
 
 const ACTIVE = new Set(['active', 'trialing', 'past_due']);

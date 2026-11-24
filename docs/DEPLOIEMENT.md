@@ -52,7 +52,17 @@ fournisseur de tuiles (offre gratuite limitée puis payante), renseigner son URL
 `MAP_TILE_URL` (format `https://…/{z}/{x}/{y}.png`) et l'attribution exigée dans
 `MAP_ATTRIBUTION`. L'origine des tuiles est ajoutée automatiquement à la politique de sécurité (CSP).
 
-## Sauvegarde (à automatiser, phase 5)
+## Compte administrateur
 
-En attendant : copie quotidienne de `data/sitolead.db` avec `sqlite3 data/sitolead.db ".backup 'sauvegarde.db'"`
-(sauvegarde cohérente même pendant l'utilisation), conservée hors du serveur.
+```bash
+npm run admin -- vous@exemple.fr
+```
+
+Crée le compte (mot de passe provisoire affiché une seule fois, à changer dans Profil) ou donne le
+rôle administrateur à un compte existant. L'onglet **Admin** apparaît alors dans l'application.
+
+## Sauvegardes
+
+Le serveur copie la base chaque jour dans `BACKUP_DIR` (`data/backups` par défaut) et garde les 14
+plus récentes (`BACKUP=0` pour désactiver). Une sauvegarde à la demande est possible depuis l'espace
+Admin. **Recopiez régulièrement `data/backups` et `data/uploads` (images) hors du serveur.**

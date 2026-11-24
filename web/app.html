@@ -24,6 +24,7 @@
       <button type="button" data-view="mockups">Maquettes</button>
       <button type="button" data-view="billing">Abonnement</button>
       <button type="button" data-view="profile">Profil</button>
+      <button type="button" data-view="admin" id="admin-nav" hidden>Admin</button>
     </nav>
     <span class="quota-pill" id="quota-pill" hidden></span>
   </div>
@@ -167,6 +168,34 @@
     <div id="mockups"></div>
   </section>
 
+  <!-- Administration (rôle admin uniquement, contrôlé côté serveur) -->
+  <section class="wrap view" id="view-admin" hidden>
+    <div class="pipeline-head">
+      <h1>Administration</h1>
+      <button type="button" class="btn btn-ghost btn-sm" id="backup-btn">Sauvegarder la base maintenant</button>
+    </div>
+    <div id="admin-alerts"></div>
+    <div class="kpis" id="admin-kpis"></div>
+    <p class="small muted">Revenu mensuel estimé d’après la grille d’offres ; les montants encaissés font foi dans le tableau de bord Stripe.</p>
+    <div class="panel">
+      <h2 class="section-title">Utilisateurs</h2>
+      <input type="search" id="admin-q" placeholder="Rechercher un email…" aria-label="Rechercher un utilisateur">
+      <div id="admin-users"></div>
+    </div>
+    <div class="panel">
+      <h2 class="section-title">Demande de suppression d’une entreprise (RGPD)</h2>
+      <form id="optout-form" class="row" novalidate>
+        <input name="value" placeholder="SIRET, SIREN, email, téléphone ou identifiant de fiche" aria-label="Entreprise à supprimer" required>
+        <button class="btn btn-sm" type="submit">Supprimer et bloquer</button>
+      </form>
+      <p class="small muted">La fiche est supprimée (avec ses maquettes) et ne sera plus jamais réimportée.</p>
+    </div>
+    <div class="panel">
+      <h2 class="section-title">Erreurs techniques récentes</h2>
+      <div id="admin-errors"></div>
+    </div>
+  </section>
+
   <!-- Abonnement -->
   <section class="wrap view" id="view-billing" hidden>
     <div id="billing-notice"></div>
@@ -197,7 +226,14 @@
     </form>
     <div class="panel">
       <p><strong>Compte</strong> <span class="muted" id="account-email"></span></p>
+      <form id="password-form" class="grid-2" novalidate>
+        <label class="field"><span>Mot de passe actuel</span><input type="password" name="current" autocomplete="current-password" required></label>
+        <label class="field"><span>Nouveau mot de passe (8 caractères minimum)</span><input type="password" name="next" autocomplete="new-password" minlength="8" required></label>
+        <p class="form-error" role="alert"></p>
+        <div><button class="btn btn-sm" type="submit">Changer mon mot de passe</button></div>
+      </form>
       <div class="row">
+        <a class="btn btn-ghost btn-sm" href="/api/me/export" download>Télécharger mes données</a>
         <button type="button" class="btn btn-ghost btn-sm" id="logout-btn">Se déconnecter</button>
         <button type="button" class="btn btn-danger btn-sm" id="delete-btn">Supprimer mon compte</button>
       </div>

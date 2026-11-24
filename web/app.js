@@ -13,7 +13,7 @@
   let STATUS_LABELS = {};
   const CLOSED = ['gagne', 'perdu', 'stop'];
   const fmtEur = (n) => `${Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} €`;
-  const VIEWS = { search: 'recherche', leads: 'prospects', mockups: 'maquettes', billing: 'abonnement', profile: 'profil' };
+  const VIEWS = { search: 'recherche', leads: 'prospects', mockups: 'maquettes', billing: 'abonnement', profile: 'profil', admin: 'admin' };
   const HASH_TO_VIEW = Object.fromEntries(Object.entries(VIEWS).map(([k, v]) => [v, k]));
 
   const state = {
@@ -93,6 +93,7 @@
       return;
     }
     $('#app-nav').hidden = false;
+    $('#admin-nav').hidden = !user.admin;
     const q = user.quota;
     pill.hidden = false;
     pill.textContent = q.plan === 'free' ? `${q.remaining} / ${q.limit} offertes` : `${fmt(q.remaining)} restantes ce mois`;
@@ -129,6 +130,7 @@
     if (push && location.hash !== `#${VIEWS[view]}`) history.replaceState(null, '', `#${VIEWS[view]}`);
     if (view === 'leads') loadLeads();
     if (view === 'mockups') loadMockups();
+    if (view === 'admin') loadAdmin();
     if (view === 'billing') renderBilling();
     if (view === 'profile') renderProfile();
     window.scrollTo(0, 0);
@@ -1064,6 +1066,103 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     });
   }
 
+  // --- Administration ---------------------------------------------------------------
+
+  const fmtUsd = (n) => `${Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} $`;
+  const fmtBytes = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} Go` : b > 1e6 ? `${(b / 1e6).toFixed(1)} Mo` : `${Math.round(b / 1e3)} Ko`);
+
+  async function loadAdmin() {
+    try {
+      const { overview: o, alerts, errors } = await api('/api/admin/overview');
+      $('#admin-alerts').innerHTML = alerts.map((a) => `<p class="notice warn">${h(a)}</p>`).join('');
+      const plans = Object.entries(o.byPlan).map(([k, v]) => `${k} : ${v}`).join(' · ');
+      $('#admin-kpis').innerHTML = [
+        [fmt(o.users), `utilisateurs (${plans || 'aucun'})`],
+        [fmt(o.signups7d), 'inscriptions sur 7 jours'],
+        [fmtEur(o.mrrEstimate), 'revenu mensuel estimé'],
+        [fmt(o.pastDue), 'paiements échoués'],
+        [fmt(o.unlocks30d), 'déblocages sur 30 jours'],
+        [fmt(o.mockups30d), 'maquettes sur 30 jours'],
+        [`${fmtUsd(o.aiToday.usd)} / ${fmtUsd(o.aiDailyBudgetUsd)}`, `dépense IA du jour (${o.aiToday.calls} rédactions)`],
+        [fmtUsd(o.ai30d.usd), `dépense IA sur 30 jours (${o.ai30d.calls} rédactions)`],
+        [fmt(o.prospects), 'entreprises en base'],
+        [fmt(o.collectQueue), `communes en file OSM (${o.osmFailures} échecs)`],
+        [fmt(o.optouts), 'oppositions / suppressions'],
+        [fmtBytes(o.mediaBytes), 'images stockées'],
+        [fmt(o.errors24h), 'erreurs sur 24 h'],
+      ]
+        .map(([n, l]) => `<div class="kpi"><strong>${h(n)}</strong><span>${h(l)}</span></div>`)
+        .join('');
+      $('#admin-errors').innerHTML = errors.length
+        ? `<ul class="admin-errors">${errors.map((e) => `<li><span class="muted small">${h(new Date(e.at).toLocaleString('fr-FR'))}</span> <code>${h(e.route)}</code> ${h(e.message)}</li>`).join('')}</ul>`
+        : '<p class="small muted">Aucune erreur enregistrée.</p>';
+      await loadAdminUsers();
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  async function loadAdminUsers() {
+    const q = $('#admin-q').value.trim();
+    const { items } = await api(`/api/admin/users?q=${encodeURIComponent(q)}`);
+    $('#admin-users').innerHTML = items.length
+      ? `<div class="table-scroll"><table class="lead-table"><thead><tr><th scope="col">Email</th><th scope="col">Offre</th><th scope="col">Inscrit le</th><th scope="col">Leads</th><th scope="col">Maquettes</th><th scope="col">IA</th><th scope="col">Crédits</th><th scope="col">Offrir des crédits</th></tr></thead><tbody>${items
+          .map(
+            (u) => `<tr>
+  <td>${h(u.email)}${u.role === 'admin' ? ' <span class="tag">admin</span>' : ''}</td>
+  <td>${h(u.plan)}${u.plan_status === 'past_due' ? ' <span class="tag tag-hot">impayé</span>' : ''}${u.billing_interval === 'year' ? ' <span class="tag">annuel</span>' : ''}</td>
+  <td class="small">${h(fmtDate(u.created_at))}</td>
+  <td>${fmt(u.leads)}</td><td>${fmt(u.mockups)}</td><td class="small">${h(fmtUsd(u.aiUsd))}</td><td>${fmt(u.quota.credits)}</td>
+  <td><form class="row grant-form" data-user="${u.id}"><input name="amount" type="number" min="1" max="10000" value="10" aria-label="Crédits à offrir à ${h(u.email)}"><button class="btn btn-sm btn-ghost" type="submit">Offrir</button></form></td>
+</tr>`,
+          )
+          .join('')}</tbody></table></div>`
+      : '<p class="small muted">Aucun utilisateur.</p>';
+  }
+
+  function bindAdmin() {
+    let t;
+    $('#admin-q').addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => loadAdminUsers().catch(handleError), 250);
+    });
+    $('#admin-users').addEventListener('submit', async (ev) => {
+      const f = ev.target.closest('.grant-form');
+      if (!f) return;
+      ev.preventDefault();
+      try {
+        await api(`/api/admin/users/${f.dataset.user}/credits`, { method: 'POST', body: { amount: Number(f.amount.value) } });
+        toast('Crédits offerts');
+        loadAdminUsers();
+      } catch (e) {
+        handleError(e);
+      }
+    });
+    $('#optout-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      try {
+        const r = await api('/api/admin/optouts', { method: 'POST', body: { value: ev.target.value.value } });
+        toast(`Opposition enregistrée (${r.key}) : ${r.removed} fiche${r.removed > 1 ? 's' : ''} supprimée${r.removed > 1 ? 's' : ''}`);
+        ev.target.reset();
+        loadAdmin();
+      } catch (e) {
+        handleError(e);
+      }
+    });
+    $('#backup-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const { file } = await api('/api/admin/backup', { method: 'POST' });
+        toast(`Sauvegarde créée : ${file}`);
+      } catch (err) {
+        handleError(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   // --- Pipeline -----------------------------------------------------------------------
 
   async function loadLeads() {
@@ -1423,6 +1522,19 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
         err.textContent = e.message;
       }
     });
+    $('#password-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      const err = $('.form-error', f);
+      err.textContent = '';
+      try {
+        await api('/api/me/password', { method: 'PUT', body: { current: f.current.value, next: f.next.value } });
+        f.reset();
+        toast('Mot de passe changé (vos autres sessions ont été déconnectées)');
+      } catch (e) {
+        err.textContent = e.message;
+      }
+    });
     $('#logout-btn').addEventListener('click', async () => {
       await api('/api/logout', { method: 'POST' }).catch(() => {});
       location.href = '/';
@@ -1471,6 +1583,7 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       bindSearch();
       bindLeads();
       bindEditor();
+      bindAdmin();
       bindProfile();
       bindGlobal();
       const hash = location.hash.slice(1);

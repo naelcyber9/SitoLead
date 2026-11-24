@@ -404,3 +404,13 @@ fieldset.images { border: 1px solid var(--line); border-radius: var(--radius-sm)
 /* Navigation de l'application : 5 onglets sur une ligne, défilement horizontal si l'écran est étroit. */
 .nav nav.app-nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 2px; min-width: 0; }
 .app-nav button { white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+
+/* --- Administration (phase 5) -------------------------------------------------------- */
+#view-admin .panel { margin-top: 20px; }
+#admin-q { max-width: 360px; margin-bottom: 12px; }
+.grant-form { gap: 6px; flex-wrap: nowrap; }
+.grant-form input { width: 80px; min-height: 34px; padding: 4px 8px; }
+.admin-errors { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: .9rem; }
+.admin-errors code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+#optout-form input { flex: 1 1 280px; }
+#password-form { margin: 12px 0; }

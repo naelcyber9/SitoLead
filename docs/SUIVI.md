@@ -83,9 +83,18 @@ de l'hébergement, choix du payeur) n'est **pas** développé ; il pourra l'êtr
 | Télécharger la maquette en HTML | ✅ | Fichier autonome (styles et images intégrés), sans bandeau « proposition », indexable ; commentaire indiquant où brancher le formulaire de contact. Réservé au propriétaire |
 | Hébergement par SitoLead | ✖ | Écarté pour l'instant (coûts fixes et responsabilité sans revenu garanti) |
 
-## Phase 5 — Finalisation ⬜
+## Phase 5 — Finalisation 🟡
 
-Administration, export des données personnelles, sauvegardes, monitoring, documentation de déploiement complète.
+| Élément | État | Détail |
+|---|---|---|
+| Compte administrateur | ✅ | Rôle `admin` ; `npm run admin -- email` crée le compte (mot de passe provisoire affiché une fois) ou donne le rôle à un compte existant |
+| Espace Admin | ✅ | Utilisateurs par offre, inscriptions, revenu mensuel estimé, impayés, déblocages, maquettes, dépense IA (jour / 30 jours / plafond), base, file OpenStreetMap, oppositions, stockage des images, erreurs ; alertes de consommation anormale ; recherche d'utilisateurs ; crédits offerts (tracés) ; suppression RGPD d'une entreprise ; sauvegarde à la demande. Routes invisibles (404) pour les autres comptes |
+| Journal des erreurs | ✅ | Route et message, sans identifiant ni donnée personnelle, conservé 30 jours |
+| Changement de mot de passe | ✅ | Ancien mot de passe vérifié, autres sessions fermées |
+| Export RGPD | ✅ | « Télécharger mes données » (JSON) : compte, prospects, notes, historique, favoris, maquettes, images, crédits, usage IA |
+| Sauvegardes | ✅ | Copie cohérente quotidienne (`VACUUM INTO`) dans `data/backups`, 14 conservées ; à recopier hors du serveur avec `data/uploads` |
+| Grille d'offres modifiable depuis l'administration | ⬜ | Aujourd'hui dans `src/billing.ts` (modification = nouvelle version) |
+| Monitoring externe (disponibilité) | ⬜ | À brancher au déploiement (service de surveillance gratuit) |
 
 ## Décisions en attente
 
