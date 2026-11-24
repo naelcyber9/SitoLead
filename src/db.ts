@@ -127,6 +127,26 @@ CREATE TABLE IF NOT EXISTS mockup_events (
 );
 CREATE INDEX IF NOT EXISTS idx_mockup_events ON mockup_events (user_id, created_at);
 
+-- Rédactions IA : quota par utilisateur et budget quotidien global (coût estimé en USD).
+CREATE TABLE IF NOT EXISTS ai_usage (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at    TEXT NOT NULL,
+  input_tokens  INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cost_usd      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage ON ai_usage (created_at, user_id);
+
+-- Images envoyées par les utilisateurs (logo, photo des maquettes), fichiers dans UPLOAD_DIR.
+CREATE TABLE IF NOT EXISTS media (
+  id         TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_user ON media (user_id, created_at);
+
 -- Paramètres internes (versions de barème, etc.).
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,

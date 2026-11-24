@@ -365,3 +365,12 @@ textarea.pitch-text { width: 100%; font: inherit; line-height: 1.5; }
   .editor-form { overflow: visible; }
   .frame-wrap { min-height: 520px; }
 }
+
+/* --- IA et images des maquettes ------------------------------------------------------ */
+.ai-box { padding: 12px 14px; margin-bottom: 12px; }
+.ai-box .row { gap: 8px; flex-wrap: wrap; }
+.ai-box select { width: auto; min-height: 36px; }
+fieldset.images { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; }
+.image-slot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.image-slot > span { min-width: 110px; font-weight: 600; font-size: .92rem; }
+.image-slot img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }

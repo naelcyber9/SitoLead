@@ -161,10 +161,14 @@ export interface MockupData {
   primary: string;
   accent: string;
   art: ArtKey;
+  /** Images envoyées par l'utilisateur (identifiants de média), vides si aucune. */
+  logo: string;
+  photo: string;
   sections: { about: boolean; services: boolean; area: boolean; hours: boolean; contact: boolean };
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
+const MEDIA = /^[A-Za-z0-9_-]{22}$/;
 const LIMITS = { name: 80, tagline: 120, about: 1200, service: 80, services: 8, area: 300, phone: 30, email: 120, address: 200, hours: 400, cta: 40 };
 
 // eslint-disable-next-line no-control-regex
@@ -196,6 +200,8 @@ export function sanitizeData(input: unknown, fallback: MockupData): MockupData {
     primary: typeof o.primary === 'string' && HEX.test(o.primary) ? o.primary : fallback.primary,
     accent: typeof o.accent === 'string' && HEX.test(o.accent) ? o.accent : fallback.accent,
     art: typeof o.art === 'string' && o.art in ART ? (o.art as ArtKey) : fallback.art,
+    logo: typeof o.logo === 'string' && (o.logo === '' || MEDIA.test(o.logo)) ? o.logo : (fallback.logo ?? ''),
+    photo: typeof o.photo === 'string' && (o.photo === '' || MEDIA.test(o.photo)) ? o.photo : (fallback.photo ?? ''),
     sections: { about: bool('about'), services: bool('services'), area: bool('area'), hours: bool('hours'), contact: bool('contact') },
   };
 }
@@ -222,6 +228,8 @@ export function defaultData(p: Pick<PublicProspect, 'name' | 'trade' | 'city' | 
     primary: sector.primary,
     accent: sector.accent,
     art: sector.art,
+    logo: '',
+    photo: '',
     sections: { about: true, services: true, area: true, hours: false, contact: true },
   };
 }
@@ -280,7 +288,8 @@ a{color:var(--p)}.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
 header.top{background:#fff;border-bottom:1px solid #e7e5df}header.top .wrap{display:flex;justify-content:space-between;align-items:center;min-height:64px;gap:12px}
 .brand{font-weight:800;font-size:1.15rem;color:#1d1d1f;text-decoration:none}
 .btn{display:inline-block;background:var(--a);color:var(--on-a);padding:12px 20px;border-radius:10px;font:inherit;font-weight:700;text-decoration:none;border:0;cursor:pointer;white-space:nowrap}
-.brand{min-width:0;overflow-wrap:anywhere}
+.brand{min-width:0;overflow-wrap:anywhere;display:flex;align-items:center;gap:10px}.brand .logo{height:40px;width:auto;max-width:120px;object-fit:contain}
+.hero-photo{width:100%;max-width:420px;aspect-ratio:4/3;object-fit:cover;border-radius:14px;justify-self:center;box-shadow:0 12px 30px rgb(0 0 0/.25)}
 .btn[disabled]{opacity:.7;cursor:not-allowed}
 .hero{background:var(--p);color:var(--on);padding:64px 0}.hero .wrap{display:grid;grid-template-columns:1.4fr 1fr;gap:32px;align-items:center}
 .hero h1{font-size:clamp(1.8rem,4.5vw,2.8rem);line-height:1.15;margin:0 0 12px}.hero p{font-size:1.1rem;margin:0 0 24px;opacity:.92}
@@ -297,9 +306,11 @@ footer{background:#1d1d1f;color:#d6d6d6;padding:28px 0;font-size:.85rem}
 </head>
 <body>
 <div class="proposal" role="note"><div class="wrap"><span>Proposition de site réalisée par ${esc(creator.name)}, <strong>non officielle</strong> : ce n’est pas le site de ${esc(d.name)}.</span>${creatorContact ? `<span>${creatorContact}</span>` : ''}</div></div>
-<header class="top"><div class="wrap"><a class="brand" href="#accueil">${esc(d.name)}</a>${d.phone ? `<a class="btn" href="${esc(telHref(d.phone))}">${esc(d.phone)}</a>` : `<a class="btn" href="#contact">${esc(d.cta)}</a>`}</div></header>
+<header class="top"><div class="wrap"><a class="brand" href="#accueil">${d.logo ? `<img class="logo" src="/media/${esc(d.logo)}" alt="">` : ''}${esc(d.name)}</a>${d.phone ? `<a class="btn" href="${esc(telHref(d.phone))}">${esc(d.phone)}</a>` : `<a class="btn" href="#contact">${esc(d.cta)}</a>`}</div></header>
 <main>
-<div class="hero" id="accueil"><div class="wrap"><div><h1>${esc(d.tagline || d.name)}</h1>${d.area ? `<p>${esc(d.area)}</p>` : ''}<a class="btn" href="#contact">${esc(d.cta)}</a></div><svg viewBox="0 0 120 120" aria-hidden="true">${ART[d.art]}</svg></div></div>
+<div class="hero" id="accueil"><div class="wrap"><div><h1>${esc(d.tagline || d.name)}</h1>${d.area ? `<p>${esc(d.area)}</p>` : ''}<a class="btn" href="#contact">${esc(d.cta)}</a></div>${
+    d.photo ? `<img class="hero-photo" src="/media/${esc(d.photo)}" alt="">` : `<svg viewBox="0 0 120 120" aria-hidden="true">${ART[d.art]}</svg>`
+  }</div></div>
 ${d.sections.about && d.about ? `<section id="presentation"><div class="wrap"><h2>Présentation</h2><p>${esc(d.about)}</p></div></section>` : ''}
 ${d.sections.services && d.services.length ? `<section class="alt" id="prestations"><div class="wrap"><h2>Prestations</h2><ul class="services">${d.services.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div></section>` : ''}
 ${d.sections.area && d.area ? `<section id="zone"><div class="wrap"><h2>Zone d’intervention</h2><p>${esc(d.area)}</p></div></section>` : ''}

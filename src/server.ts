@@ -42,9 +42,12 @@ const MOCKUP_HEADERS: Record<string, string> = {
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'SAMEORIGIN',
   'x-robots-tag': 'noindex, nofollow, noarchive',
-  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'self'; base-uri 'none'",
+  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'none'; frame-ancestors 'self'; base-uri 'none'",
   'cache-control': 'no-store',
 };
+
+import { aiConfigured, aiQuota, isTone, suggestTexts, type Generate } from './ai.ts';
+import { deleteAllMedia, deleteMedia, listMedia, mediaQuota, ownsMedia, readMedia, saveImage } from './media.ts';
 
 const creatorOf = (u: Pick<UserRow, 'full_name' | 'agency_name' | 'email' | 'phone'>): Creator => ({
   name: u.agency_name || u.full_name || 'un créateur de sites',
@@ -71,6 +74,8 @@ export interface AppOptions {
   /** Remplaçable dans les tests. */
   checkout?: typeof createCheckout;
   portal?: typeof createPortal;
+  /** Rédaction IA (remplaçable dans les tests, aucun appel réel). */
+  ai?: Generate;
 }
 
 class HttpError extends Error {
@@ -179,6 +184,8 @@ function publicUser(db: DB, u: UserRow) {
     hasBilling: Boolean(u.stripe_customer_id),
     quota: quotaFor(db, u),
     mockupQuota: mockupQuota(db, u),
+    aiQuota: aiQuota(db, u),
+    mediaQuota: mediaQuota(db, u),
   };
 }
 
@@ -290,7 +297,29 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
           sectors: sectorsForClient(),
           artKeys: ART_KEYS,
           expiryDays: EXPIRY_DAYS,
+          ai: aiConfigured(),
         });
+
+      case 'GET /api/media': {
+        const u = requireUser(req);
+        return json(res, 200, { items: listMedia(db, u.id), mediaQuota: mediaQuota(db, u) });
+      }
+
+      case 'POST /api/media': {
+        // Image envoyée en JSON ({ data: base64 }) : la protection CSRF (JSON obligatoire) s'applique.
+        const u = requireUser(req);
+        const raw = await readBody(req, 2_200_000);
+        let b64 = '';
+        try {
+          b64 = String((JSON.parse(raw) as { data?: unknown }).data ?? '');
+        } catch {
+          throw new HttpError(400, 'JSON invalide');
+        }
+        if (b64.trim().toLowerCase() !== '' && !/^[A-Za-z0-9+/=\s]+$/.test(b64)) throw new HttpError(400, 'Image invalide');
+        const r = await saveImage(db, u, Buffer.from(b64, 'base64'));
+        if (!r.ok) throw new HttpError(400, r.message);
+        return json(res, 201, { id: r.id, url: `/media/${r.id}`, mediaQuota: mediaQuota(db, u) });
+      }
 
       case 'GET /api/mockups': {
         const u = requireUser(req);
@@ -381,6 +410,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         if (effectivePlan(u).id !== 'free' && u.plan_status !== 'canceled') {
           throw new HttpError(409, 'Résiliez d’abord votre abonnement (rubrique Abonnement), puis supprimez votre compte');
         }
+        await deleteAllMedia(db, u.id);
         db.prepare('DELETE FROM users WHERE id = ?').run(u.id);
         return json(res, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
       }
@@ -554,8 +584,35 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       if (parts.length === 3 && method === 'GET') return json(res, 200, { mockup: mockupView(own, appUrl) });
       if (parts.length === 3 && method === 'PATCH') {
         const b = await readJson(req);
+        // Une maquette ne peut afficher que les images de son propriétaire.
+        if (b.data && typeof b.data === 'object') {
+          const d = b.data as Record<string, unknown>;
+          for (const k of ['logo', 'photo']) if (typeof d[k] === 'string' && d[k] && !ownsMedia(db, u.id, d[k] as string)) d[k] = '';
+        }
         const m = updateMockup(db, u.id, id, { data: b.data, expiresInDays: b.expiresInDays });
         return json(res, 200, { mockup: mockupView(m!, appUrl) });
+      }
+      // Propositions de textes par l'IA : renvoyées à l'éditeur, jamais enregistrées sans relecture.
+      if (parts.length === 4 && parts[3] === 'ia' && method === 'POST') {
+        const b = await readJson(req);
+        const d = parseData(own);
+        const lead = getLead(db, u.id, own.prospect_id);
+        const r = await suggestTexts(
+          db,
+          u,
+          {
+            name: d.name,
+            tradeLabel: lead?.tradeLabel ?? 'entreprise locale',
+            city: lead?.city ?? '',
+            area: d.area,
+            services: d.services,
+            about: d.about,
+            tone: isTone(b.tone) ? b.tone : 'professionnel',
+          },
+          opts.ai,
+        );
+        if (!r.ok) throw new HttpError(r.reason === 'quota' ? 402 : r.reason === 'disabled' ? 503 : 429, r.message, r.reason === 'quota' ? 'upgrade' : undefined);
+        return json(res, 200, { suggestion: r.suggestion, aiQuota: aiQuota(db, u) });
       }
       if (parts.length === 3 && method === 'DELETE') {
         deleteMockup(db, u.id, id);
@@ -570,6 +627,11 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         res.writeHead(200, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });
         return void res.end(renderMockup(parseData(own), creatorOf(u)));
       }
+    }
+    if (parts[1] === 'media' && parts.length === 3 && method === 'DELETE') {
+      const u = requireUser(req);
+      if (!(await deleteMedia(db, u.id, parts[2]!))) throw new HttpError(404, 'Image introuvable');
+      return json(res, 200, { ok: true, mediaQuota: mediaQuota(db, u) });
     }
     if (parts[1] === 'prospects' && parts.length === 4 && parts[3] === 'favorite' && method === 'PUT') {
       const u = requireUser(req);
@@ -646,6 +708,20 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
       if (userBySession(db, cookies(req).sid)?.id !== owner.id) countView(db, r.row.id);
       res.writeHead(200, { ...MOCKUP_HEADERS, 'content-type': 'text/html; charset=utf-8' });
       return void res.end(renderMockup(parseData(r.row), creatorOf(owner)));
+    }
+    // Images des maquettes : servies sous leur nom aléatoire, jamais interprétées comme autre chose.
+    if (a === 'media' && b && parts.length === 2) {
+      const m = await readMedia(db, b);
+      if (m) {
+        res.writeHead(200, {
+          'content-type': m.mime,
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'",
+          'cache-control': 'public, max-age=86400',
+          'x-robots-tag': 'noindex',
+        });
+        return void res.end(m.data);
+      }
     }
     if (a === 'tarifs' && parts.length === 1) return html(res, 200, seo.pricingPage(appUrl));
     if (a === 'mentions-legales' && parts.length === 1) return html(res, 200, seo.legalNoticePage(appUrl));

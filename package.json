@@ -18,6 +18,8 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "leaflet": "1.9.4"
+    "@anthropic-ai/sdk": "^1.13.0",
+    "leaflet": "1.9.4",
+    "zod": "^4.6.7"
   }
 }

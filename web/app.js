@@ -856,7 +856,11 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
     const d = m.data;
     f.sector.innerHTML = state.config.sectors.map((s) => `<option value="${h(s.id)}">${h(s.label)}</option>`).join('');
     f.art.innerHTML = state.config.artKeys.map((k) => `<option value="${h(k)}">${h(ART_LABELS[k] ?? k)}</option>`).join('');
-    for (const k of ['sector', 'name', 'tagline', 'about', 'area', 'phone', 'email', 'address', 'hours', 'cta', 'primary', 'accent', 'art']) f[k].value = d[k] ?? '';
+    for (const k of ['sector', 'name', 'tagline', 'about', 'area', 'phone', 'email', 'address', 'hours', 'cta', 'primary', 'accent', 'art', 'logo', 'photo']) f[k].value = d[k] ?? '';
+    syncImageSlots();
+    $('#ai-box').hidden = !state.config.ai;
+    const aq = state.user?.aiQuota;
+    $('#ai-quota').textContent = aq ? `(${aq.remaining} restante${aq.remaining > 1 ? 's' : ''} ce mois-ci)` : '';
     f.services.value = (d.services ?? []).join('\n');
     for (const k of ['about', 'services', 'area', 'hours', 'contact']) f[`s_${k}`].checked = Boolean(d.sections?.[k]);
     f.expires.value = '';
@@ -895,13 +899,85 @@ ${active ? '<p class="small muted">Le lien de la maquette est inclus dans le mes
       sector: v('sector'), name: v('name'), tagline: v('tagline'), about: v('about'),
       services: v('services').split('\n').map((s) => s.trim()).filter(Boolean),
       area: v('area'), phone: v('phone'), email: v('email'), address: v('address'), hours: v('hours'), cta: v('cta'),
-      primary: v('primary'), accent: v('accent'), art: v('art'),
+      primary: v('primary'), accent: v('accent'), art: v('art'), logo: v('logo'), photo: v('photo'),
       sections: Object.fromEntries(['about', 'services', 'area', 'hours', 'contact'].map((k) => [k, f[`s_${k}`].checked])),
     };
   }
 
+  function syncImageSlots() {
+    const f = $('#mockup-form');
+    for (const slot of ['logo', 'photo']) {
+      const id = f[slot].value;
+      const el = $(`.image-slot[data-slot="${slot}"]`);
+      const img = $('img', el);
+      img.hidden = !id;
+      if (id) img.src = `/media/${encodeURIComponent(id)}`;
+      else img.removeAttribute('src');
+      $('[data-clear]', el).hidden = !id;
+    }
+  }
+
+  const readAsBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => reject(new Error('Lecture du fichier impossible'));
+      r.readAsDataURL(file);
+    });
+
   function bindEditor() {
     const f = $('#mockup-form');
+    // Images : choix du fichier, envoi, aperçu ; enregistrées avec la maquette au clic sur « Enregistrer ».
+    let pickSlot = null;
+    $$('[data-pick]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (!$('#image-rights').checked) return toast('Confirmez d’abord que vous avez le droit d’utiliser ces images');
+        pickSlot = b.dataset.pick;
+        $('#image-file').click();
+      }),
+    );
+    $$('[data-clear]').forEach((b) =>
+      b.addEventListener('click', () => {
+        f[b.dataset.clear].value = '';
+        syncImageSlots();
+      }),
+    );
+    $('#image-file').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file || !pickSlot) return;
+      if (file.size > 1_500_000) return toast('Image trop lourde (1,5 Mo maximum) : réduisez-la avant de l’envoyer');
+      try {
+        const { id, mediaQuota } = await api('/api/media', { method: 'POST', body: { data: await readAsBase64(file) } });
+        f[pickSlot].value = id;
+        setUser({ ...state.user, mediaQuota });
+        syncImageSlots();
+        toast('Image ajoutée : enregistrez la maquette pour l’afficher');
+      } catch (err) {
+        handleError(err);
+      }
+    });
+    $('#ai-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Rédaction…';
+      try {
+        const { suggestion: s, aiQuota } = await api(`/api/mockups/${encodeURIComponent(editing.id)}/ia`, { method: 'POST', body: { tone: f.tone.value } });
+        if (s.tagline) f.tagline.value = s.tagline;
+        if (s.about) f.about.value = s.about;
+        if (s.services.length) f.services.value = s.services.join('\n');
+        if (s.cta) f.cta.value = s.cta;
+        setUser({ ...state.user, aiQuota });
+        $('#ai-quota').textContent = `(${aiQuota.remaining} restante${aiQuota.remaining > 1 ? 's' : ''} ce mois-ci)`;
+        toast('Textes proposés : relisez-les puis enregistrez');
+      } catch (err) {
+        if (err.status === 402) $('#mockup-dialog').close();
+        handleError(err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Proposer des textes';
+      }
+    });
     f.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const body = { data: editorData() };

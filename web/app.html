@@ -217,6 +217,18 @@
     <form id="mockup-form" class="editor-form" novalidate>
       <p class="notice warn small">Vérifiez chaque information avec l’entreprise : n’ajoutez ni avis, ni certification, ni tarif, ni ancienneté qui ne soient pas confirmés.</p>
       <label class="field"><span>Secteur (modèle)</span><select name="sector"></select></label>
+      <div class="panel ai-box" id="ai-box" hidden>
+        <p class="small"><strong>Rédaction par IA</strong> <span class="muted" id="ai-quota"></span></p>
+        <div class="row">
+          <select name="tone" aria-label="Ton des textes">
+            <option value="professionnel">Ton professionnel</option>
+            <option value="chaleureux">Ton chaleureux</option>
+            <option value="direct">Ton direct</option>
+          </select>
+          <button type="button" class="btn btn-sm btn-ghost" id="ai-btn">Proposer des textes</button>
+        </div>
+        <p class="small muted">L’IA reformule à partir des seules informations réelles. Relisez avant d’enregistrer.</p>
+      </div>
       <label class="field"><span>Nom de l’entreprise</span><input name="name" maxlength="80" required></label>
       <label class="field"><span>Accroche</span><input name="tagline" maxlength="120"></label>
       <label class="field"><span>Présentation</span><textarea name="about" maxlength="1200" rows="4"></textarea></label>
@@ -233,7 +245,15 @@
         <label class="field"><span>Couleur principale</span><input name="primary" type="color"></label>
         <label class="field"><span>Couleur d’accent</span><input name="accent" type="color"></label>
       </div>
-      <label class="field"><span>Illustration</span><select name="art"></select></label>
+      <label class="field"><span>Illustration (si aucune photo)</span><select name="art"></select></label>
+      <fieldset class="field images"><legend>Images</legend>
+        <input type="hidden" name="logo"><input type="hidden" name="photo">
+        <div class="image-slot" data-slot="logo"><span>Logo</span><img alt="" hidden><button type="button" class="btn btn-sm btn-ghost" data-pick="logo">Choisir…</button><button type="button" class="btn-link small" data-clear="logo" hidden>Retirer</button></div>
+        <div class="image-slot" data-slot="photo"><span>Photo principale</span><img alt="" hidden><button type="button" class="btn btn-sm btn-ghost" data-pick="photo">Choisir…</button><button type="button" class="btn-link small" data-clear="photo" hidden>Retirer</button></div>
+        <label class="check"><input type="checkbox" id="image-rights"><span>J’ai le droit d’utiliser ces images (fournies par l’entreprise, prises par moi ou libres de droits).</span></label>
+        <p class="small muted">JPEG, PNG ou WebP, 1,5 Mo maximum. Les données de localisation des photos sont retirées.</p>
+        <input type="file" id="image-file" accept="image/jpeg,image/png,image/webp" hidden>
+      </fieldset>
       <fieldset class="field sections"><legend>Sections affichées</legend>
         <label class="check"><input type="checkbox" name="s_about"><span>Présentation</span></label>
         <label class="check"><input type="checkbox" name="s_services"><span>Prestations</span></label>
